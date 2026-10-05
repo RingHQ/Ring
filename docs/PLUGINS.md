@@ -130,8 +130,8 @@ Ring must not use the processor while idle.
 
 ## Trying it
 
-[`examples/plugins/example.py`](../examples/plugins/example.py) is a complete
-plugin, and the ones in the plugin repository show more. To try a plugin
+The plugins in the [plugin repository](https://github.com/RingHQ/Plugins)
+are complete examples; `presets` is the shortest. To try a plugin
 folder before it is published, `ring plugins install <name> --from <folder>`
 takes it from a local copy of the repository. Errors while loading a plugin show up in the settings window and in
 `journalctl --user -u ring`.

@@ -31,32 +31,41 @@ grow, shrink, move, fill the free space, other screens and desktops, undo.
 
 ## Install
 
-Requirements, from your distribution's packages (Arch names):
-`pyside6`, `layer-shell-qt`, and Xwayland.
+First the two things Ring needs from your distribution (Arch names; on
+Fedora `python3-pyside6` and `layer-shell-qt`):
 
 ```sh
-git clone https://github.com/RingHQ/Ring ring && cd ring
-python -m venv --system-site-packages .venv
-.venv/bin/pip install .
-.venv/bin/ring doctor    # checks your session
-.venv/bin/ring run       # start it
+sudo pacman -S --needed pyside6 layer-shell-qt
 ```
 
-The venv must see the system packages: the PyPI build of PySide6 cannot draw
-above other windows on Wayland.
+Then one command installs Ring for your user, starts it and makes it start
+at login. No root needed:
 
-To start it at login, copy `packaging/ring.service` to
-`~/.config/systemd/user/`, point `ExecStart` at your `ring`, and run
-`systemctl --user enable --now ring`.
+```sh
+curl -fsSL https://raw.githubusercontent.com/RingHQ/Ring/main/install.sh | sh
+```
+
+Hold **Right Ctrl** and the ring appears. `ring doctor` checks your session
+if it does not. Run the same command again to update.
+
+To remove Ring again (your settings stay):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/RingHQ/Ring/main/install.sh | sh -s -- --uninstall
+```
+
+Ring uses your distribution's PySide6 on purpose: the PyPI build cannot draw
+above other windows on Wayland. The script puts Ring in
+`~/.local/share/ring`, the `ring` command in `~/.local/bin`, a systemd user
+service in `~/.config/systemd/user` and "Ring Settings" in your application
+launcher. `sh -s -- --no-service` skips the service.
 
 ## Configure
 
-Run `ring settings` for the settings window: trigger, colors of the ring
-and the preview, sizes, what each direction and key does, gaps, animation,
-stashing. **Apply** saves and restarts Ring with the new settings. To get it
-in your application launcher, copy `packaging/ring-settings.desktop` to
-`~/.local/share/applications/` and `assets/ring-icon.svg` to
-`~/.local/share/icons/hicolor/scalable/apps/ring.svg`.
+Open **Ring Settings** from your application launcher, or run
+`ring settings`: trigger, colors of the ring and the preview, sizes, what
+each direction and key does, gaps, animation, stashing. **Apply** saves and
+restarts Ring with the new settings.
 
 The About tab has the **used counter**: how many windows Ring has moved for
 you, and with which actions. `ring stats` prints the same.
@@ -102,8 +111,11 @@ ring doctor              # check session, monitors and configuration
 ## Development
 
 ```sh
+git clone https://github.com/RingHQ/Ring && cd Ring
+python -m venv --system-site-packages .venv
 .venv/bin/pip install -e '.[dev]'
 .venv/bin/ruff check . && .venv/bin/mypy
+.venv/bin/ring run
 ```
 
 ## Credits and license
