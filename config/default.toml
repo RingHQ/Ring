@@ -1,0 +1,163 @@
+# loop-linux default configuration. The defaults follow Loop for macOS.
+#
+# Copy this file to ~/.config/looplinux/config.toml and keep only the keys you
+# want to change; everything you leave out falls back to the values below.
+#
+# Actions
+#   General:    none, maximize, almost_maximize, fullscreen, maximize_height,
+#               maximize_width, fill_available_space, center, macos_center,
+#               minimize, minimize_others, undo, initial_frame
+#   Halves:     top_half, bottom_half, left_half, right_half,
+#               horizontal_center_half, vertical_center_half
+#   Quarters:   top_left_quarter, top_right_quarter, bottom_left_quarter,
+#               bottom_right_quarter
+#   Thirds:     left_third, left_two_thirds, horizontal_center_third,
+#               right_two_thirds, right_third, top_third, top_two_thirds,
+#               vertical_center_third, bottom_two_thirds, bottom_third
+#   Fourths:    first_fourth, second_fourth, third_fourth, fourth_fourth,
+#               left_three_fourths, right_three_fourths
+#   Screens:    next_screen, previous_screen, left_screen, right_screen,
+#               top_screen, bottom_screen
+#   Desktops:   next_desktop, previous_desktop
+#   Resize:     larger, smaller, scale_up, scale_down, grow_top, grow_bottom,
+#               grow_left, grow_right, grow_horizontal, grow_vertical,
+#               shrink_top, shrink_bottom, shrink_left, shrink_right,
+#               shrink_horizontal, shrink_vertical
+#   Move:       move_up, move_down, move_left, move_right
+#   Stash:      stash_left, stash_right, stash_bottom, unstash
+#   Custom:     the name of a [custom_actions] entry
+#
+# Wherever an action is expected, a list of actions makes a cycle: selecting
+# it again (same key, or a left click in the radial menu) steps through it.
+
+[trigger]
+# Hold the trigger to show the radial menu, release it to apply.
+#   "key":      a single key, by default Right Ctrl. The key keeps working in
+#               applications, so pick one you do not use for shortcuts.
+#   "shortcut": a desktop (KDE) global shortcut, which may be a combination.
+use = "key"
+# For "key": an evdev key name. Modifiers and keys that type nothing work,
+# e.g. KEY_RIGHTCTRL, KEY_RIGHTALT, KEY_CAPSLOCK, KEY_COMPOSE (Menu), KEY_F13.
+key = "KEY_RIGHTCTRL"
+# For "shortcut": a Qt key sequence, e.g. "Meta+X". It must not be in use.
+shortcut = "Meta+X"
+# Key that closes the menu without doing anything (evdev key name).
+cancel_key = "KEY_ESC"
+
+[radial]
+radius = 50       # outer radius of the ring in pixels
+thickness = 22    # width of the ring
+
+# What each part of the radial menu selects. Moving the pointer out to the
+# ring picks one of the eight outer sectors; hovering inside the ring picks
+# `center`; staying where the menu opened selects nothing.
+[radial.sectors]
+center = ["maximize", "macos_center"]
+north = ["top_half", "top_third", "top_two_thirds"]
+north_east = "top_right_quarter"
+east = ["right_half", "right_third", "right_two_thirds"]
+south_east = "bottom_right_quarter"
+south = ["bottom_half", "bottom_third", "bottom_two_thirds"]
+south_west = "bottom_left_quarter"
+west = ["left_half", "left_third", "left_two_thirds"]
+north_west = "top_left_quarter"
+
+# Keys that pick an action while the trigger is held (evdev key names). Join
+# keys with "+" for keys that must be held together. Set an entry to "none"
+# to disable a default binding.
+[keybindings]
+KEY_SPACE = "maximize"
+KEY_ENTER = "center"
+KEY_Q = "stash_left"
+KEY_E = "stash_right"
+KEY_Z = "stash_bottom"
+KEY_R = "unstash"
+
+# Arrow keys
+KEY_UP = ["top_half", "top_third", "top_two_thirds"]
+KEY_DOWN = ["bottom_half", "bottom_third", "bottom_two_thirds"]
+KEY_RIGHT = ["right_half", "right_third", "right_two_thirds"]
+KEY_LEFT = ["left_half", "left_third", "left_two_thirds"]
+"KEY_UP+KEY_LEFT" = "top_left_quarter"
+"KEY_UP+KEY_RIGHT" = "top_right_quarter"
+"KEY_DOWN+KEY_RIGHT" = "bottom_right_quarter"
+"KEY_DOWN+KEY_LEFT" = "bottom_left_quarter"
+
+# WASD
+KEY_W = ["top_half", "top_third", "top_two_thirds"]
+KEY_S = ["bottom_half", "bottom_third", "bottom_two_thirds"]
+KEY_D = ["right_half", "right_third", "right_two_thirds"]
+KEY_A = ["left_half", "left_third", "left_two_thirds"]
+"KEY_W+KEY_A" = "top_left_quarter"
+"KEY_W+KEY_D" = "top_right_quarter"
+"KEY_S+KEY_D" = "bottom_right_quarter"
+"KEY_S+KEY_A" = "bottom_left_quarter"
+
+# Vim
+KEY_K = ["top_half", "top_third", "top_two_thirds"]
+KEY_J = ["bottom_half", "bottom_third", "bottom_two_thirds"]
+KEY_L = ["right_half", "right_third", "right_two_thirds"]
+KEY_H = ["left_half", "left_third", "left_two_thirds"]
+"KEY_K+KEY_H" = "top_left_quarter"
+"KEY_K+KEY_L" = "top_right_quarter"
+"KEY_J+KEY_L" = "bottom_right_quarter"
+"KEY_J+KEY_H" = "bottom_left_quarter"
+
+[gaps]
+outer = 0    # pixels between a window and the screen edge or panels
+inner = 0    # pixels between two windows snapped next to each other
+
+[actions]
+# Fraction of the screen left free on each side by almost_maximize
+# (0.05 = the window covers 90% of the width and height).
+almost_maximize_margin = 0.05
+# Pixels per step for larger/smaller, grow/shrink and move actions.
+size_increment = 20
+# false: a cycle continues after the size the window already has.
+# true: a cycle always starts at its first action.
+cycle_restart = false
+# Holding Shift while repeating a cycle key steps backwards.
+cycle_backwards_on_shift = true
+
+[animation]
+style = "snappy"    # fluid, relaxed, snappy, brisk or instant
+windows = true      # glide windows to their new place instead of jumping
+
+# A stashed window is tucked away behind a screen edge. Hover the strip it
+# leaves behind to slide it out; move away and it hides again.
+[stash]
+peek = 20             # pixels of the window that stay visible
+animate = true        # slide in and out (uses the animation style)
+shift_focus = true    # focus the window when it slides out, another when it hides
+
+[theme]
+accent_color = "system"    # "system" follows the desktop accent color; or #RRGGBB
+gradient_color = ""        # second color for a gradient; empty for a solid accent
+blur = true                # frosted glass behind the radial menu
+
+[preview]
+padding = 10                # space between the preview and the area it stands for
+corner_radius = 10
+border_thickness = 4
+blur = false                # frosted glass behind the preview
+start = "action_center"     # where it grows from: action_center, radial_menu, screen_center
+
+[exclusions]
+# Window classes / app ids that loop-linux never touches (case-insensitive).
+apps = []
+
+# Per-monitor overrides, keyed by output name (see `xrandr` or your compositor).
+#
+# [monitors."DP-1"]
+# outer_gap = 12
+# inner_gap = 8
+# almost_maximize_margin = 0.08
+
+# Custom actions as fractions of the work area. Use the table name as the
+# action name in [radial.sectors] or [keybindings].
+#
+# [custom_actions.center_column]
+# x = 0.25
+# y = 0.0
+# w = 0.5
+# h = 1.0

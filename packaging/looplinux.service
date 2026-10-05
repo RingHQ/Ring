@@ -1,0 +1,12 @@
+[Unit]
+Description=Ring radial window snapper
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+ExecStart=/usr/bin/looplinux run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target
