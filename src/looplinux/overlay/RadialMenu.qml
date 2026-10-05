@@ -15,7 +15,7 @@ Item {
     property bool angleAnimated: false
     property color accent: "#5e9cff"
     property color accent2: accent
-    property bool blurred: false
+    property color ringColor: Qt.rgba(0.11, 0.11, 0.12, 0.5)
     property int angleMs: 200
     property int sizeMs: 200
 
@@ -44,7 +44,7 @@ Item {
     onAccent2Changed: canvas.requestPaint()
     onOuterRadiusChanged: canvas.requestPaint()
     onThicknessChanged: canvas.requestPaint()
-    onBlurredChanged: canvas.requestPaint()
+    onRingColorChanged: canvas.requestPaint()
 
     Canvas {
         id: canvas
@@ -67,7 +67,7 @@ Item {
             ctx.beginPath();
             ctx.arc(c, c, mid, 0, 2 * Math.PI);
             ctx.lineWidth = menu.thickness;
-            ctx.strokeStyle = menu.blurred ? Qt.rgba(0.11, 0.11, 0.12, 0.5) : Qt.rgba(0.11, 0.11, 0.12, 0.86);
+            ctx.strokeStyle = menu.ringColor;
             ctx.stroke();
             ctx.restore();
 

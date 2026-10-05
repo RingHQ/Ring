@@ -15,11 +15,18 @@ from looplinux.config import Config, ConfigError, load_config, user_config_path
 from looplinux.executor import ActionError, configure_backend, perform
 from looplinux.history import History, default_history_path
 from looplinux.ipc import COMMANDS, IpcError, send_command
+from looplinux.plugins import REGISTRY, load_plugins, plugin_directory
+from looplinux.stats import Stats, default_stats_path
 
 
 def _fail(message: str) -> int:
     print(f"looplinux: {message}", file=sys.stderr)
     return 1
+
+
+def _load_plugins(config: Config, config_file: Path | None) -> None:
+    directory = plugin_directory((config_file or user_config_path()).parent)
+    load_plugins(config.enabled_plugins, directory)
 
 
 def _snap(args: argparse.Namespace) -> int:
@@ -33,12 +40,16 @@ def _snap(args: argparse.Namespace) -> int:
 
     if args.delay > 0:
         time.sleep(args.delay)
+    _load_plugins(config, args.config)
     backend = create_backend(args.backend)
     configure_backend(backend, config)
     try:
-        rect = perform(action, backend, config, History(default_history_path()))
+        window = backend.get_active_window()
+        rect = perform(action, backend, config, History(default_history_path()), window=window)
     finally:
         backend.close()
+    Stats(default_stats_path()).record(action_name(action))
+    REGISTRY.emit("action_applied", action=action_name(action), window=window, rect=rect)
     if args.verbose:
         where = f" -> {rect.width}x{rect.height} at {rect.x},{rect.y}" if rect else ""
         print(f"{action_name(action)}{where}")
@@ -49,16 +60,40 @@ def _run(args: argparse.Namespace) -> int:
     config = load_config(args.config)
     try:
         # Imported late: only the daemon needs Qt.
-        from looplinux.app import StartupError, run
+        from looplinux.app import RESTART, StartupError, run
     except ImportError as error:
         return _fail(
             f"cannot load the user interface ({error}). Install the distribution's "
             "PySide6 package (Arch: pyside6)."
         )
+    _load_plugins(config, args.config)
     try:
-        return run(config, args.backend)
+        code = run(config, args.backend)
     except StartupError as error:
         return _fail(str(error))
+    if code == RESTART:
+        # The settings changed: start over in place, keeping the process id.
+        os.execv(sys.executable, [sys.executable, "-m", "looplinux", *sys.argv[1:]])
+    return code
+
+
+def _settings(args: argparse.Namespace) -> int:
+    try:
+        from looplinux.settings import run_settings
+    except ImportError as error:
+        return _fail(
+            f"cannot load the user interface ({error}). Install the distribution's "
+            "PySide6 package (Arch: pyside6)."
+        )
+    return run_settings(args.config)
+
+
+def _stats(args: argparse.Namespace) -> int:
+    stats = Stats(default_stats_path())
+    print(f"Ring has moved windows {stats.total} times since {stats.since}.")
+    for name, count in stats.top(10):
+        print(f"{count:>7}  {name}")
+    return 0
 
 
 def _trigger(args: argparse.Namespace) -> int:
@@ -172,6 +207,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
     run = commands.add_parser("run", parents=[common], help="run the radial menu daemon")
     run.set_defaults(handler=_run)
+
+    settings = commands.add_parser("settings", help="open the settings window")
+    settings.add_argument("--config", type=Path, metavar="FILE", help="edit this config file")
+    settings.set_defaults(handler=_settings)
+
+    stats = commands.add_parser("stats", help="show how often Ring has been used")
+    stats.set_defaults(handler=_stats)
 
     trigger = commands.add_parser(
         "trigger", help="control the running daemon, e.g. from a compositor key binding"

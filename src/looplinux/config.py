@@ -6,6 +6,7 @@ by the test suite. A user file only needs to contain the keys it wants to
 change.
 """
 
+import json
 import os
 import re
 import tomllib
@@ -22,11 +23,13 @@ from looplinux.actions import (
     FractionRect,
     Gaps,
     Leaf,
+    PluginAction,
 )
 
 _KEY_NAME = re.compile(r"(KEY|BTN)_[A-Z0-9_]+")
 _COLOR = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")
 _CUSTOM_ACTION_NAME = re.compile(r"[a-z][a-z0-9_]*")
+_PLUGIN_ACTION_NAME = re.compile(r"[A-Za-z0-9_-]+\.[a-z0-9_]+")
 
 # Per animation style, from Loop: the cubic bezier curve and duration (ms) of
 # frame changes, and the duration of the ring's size change.
@@ -107,6 +110,7 @@ def _default_keybindings() -> dict[Chord, ActionSpec]:
 
 @dataclass(frozen=True, slots=True)
 class RadialConfig:
+    visible: bool = True
     radius: int = 50
     thickness: int = 22
     sectors: dict[Direction, ActionSpec] = field(default_factory=_default_sectors)
@@ -127,6 +131,11 @@ class AnimationConfig:
 
 
 @dataclass(frozen=True, slots=True)
+class TrayConfig:
+    visible: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class StashConfig:
     peek: int = 20
     animate: bool = True
@@ -137,14 +146,20 @@ class StashConfig:
 class ThemeConfig:
     accent_color: str = "system"
     gradient_color: str = ""
+    ring_color: str = "#1c1c1f"
+    ring_opacity: float = 0.5
     blur: bool = True
 
 
 @dataclass(frozen=True, slots=True)
 class PreviewConfig:
+    visible: bool = True
     padding: int = 10
     corner_radius: int = 10
     border_thickness: int = 4
+    border_color: str = "accent"
+    fill_color: str = "#000000"
+    fill_opacity: float = 0.15
     blur: bool = False
     start: str = "action_center"
 
@@ -169,7 +184,9 @@ class Config:
     theme: ThemeConfig = field(default_factory=ThemeConfig)
     preview: PreviewConfig = field(default_factory=PreviewConfig)
     stash: StashConfig = field(default_factory=StashConfig)
+    tray: TrayConfig = field(default_factory=TrayConfig)
     excluded_apps: tuple[str, ...] = ()
+    enabled_plugins: tuple[str, ...] = ()
     monitors: dict[str, MonitorOverride] = field(default_factory=dict)
     custom_actions: dict[str, CustomAction] = field(default_factory=dict)
 
@@ -198,6 +215,8 @@ class Config:
         """Look up a built-in or custom action by name."""
         if name in self.custom_actions:
             return self.custom_actions[name]
+        if "." in name:
+            return PluginAction(name)
         try:
             return Action(name)
         except ValueError:
@@ -304,12 +323,21 @@ def _margin(table: _Table, name: str, default: float) -> float:
     return value
 
 
-def _color(table: _Table, name: str, default: str, *, also: str) -> str:
+def _color(table: _Table, name: str, default: str, *, also: str | None = None) -> str:
+    """Read a color; `also` is one more accepted value, such as "system"."""
     value = table.string(name, default)
     if value != also and not _COLOR.fullmatch(value):
+        keyword = "" if also is None else f'"{also}", '
         raise ConfigError(
-            f'{table.where(name)}: expected "{also}", #RRGGBB or #RRGGBBAA, got {value!r}'
+            f"{table.where(name)}: expected {keyword}#RRGGBB or #RRGGBBAA, got {value!r}"
         )
+    return value
+
+
+def _opacity(table: _Table, name: str, default: float) -> float:
+    value = table.number(name, default)
+    if not 0 <= value <= 1:
+        raise ConfigError(f"{table.where(name)}: must be between 0 and 1, got {value}")
     return value
 
 
@@ -317,6 +345,11 @@ def _resolve_leaf(value: object, where: str, custom: Mapping[str, CustomAction])
     if isinstance(value, str):
         if value in custom:
             return custom[value]
+        # "<plugin>.<action>". Whether that plugin is around is only known
+        # when the action is used, so that a missing plugin does not make the
+        # whole configuration invalid.
+        if _PLUGIN_ACTION_NAME.fullmatch(value):
+            return PluginAction(value)
         try:
             return Action(value)
         except ValueError:
@@ -427,6 +460,7 @@ def parse_config(data: Mapping[str, object]) -> Config:
 
     radial_table = root.table("radial")
     radial = RadialConfig(
+        visible=radial_table.boolean("visible", defaults.radial.visible),
         radius=radial_table.integer("radius", defaults.radial.radius, minimum=20),
         thickness=radial_table.integer("thickness", defaults.radial.thickness, minimum=1),
         sectors=_parse_sectors(radial_table.table("sectors"), custom_actions),
@@ -482,12 +516,20 @@ def parse_config(data: Mapping[str, object]) -> Config:
         gradient_color=_color(
             theme_table, "gradient_color", defaults.theme.gradient_color, also=""
         ),
+        ring_color=_color(theme_table, "ring_color", defaults.theme.ring_color),
+        ring_opacity=_opacity(theme_table, "ring_opacity", defaults.theme.ring_opacity),
         blur=theme_table.boolean("blur", defaults.theme.blur),
     )
     theme_table.finish()
 
     preview_table = root.table("preview")
     preview = PreviewConfig(
+        visible=preview_table.boolean("visible", defaults.preview.visible),
+        border_color=_color(
+            preview_table, "border_color", defaults.preview.border_color, also="accent"
+        ),
+        fill_color=_color(preview_table, "fill_color", defaults.preview.fill_color),
+        fill_opacity=_opacity(preview_table, "fill_opacity", defaults.preview.fill_opacity),
         padding=preview_table.integer("padding", defaults.preview.padding),
         corner_radius=preview_table.integer("corner_radius", defaults.preview.corner_radius),
         border_thickness=preview_table.integer(
@@ -506,9 +548,17 @@ def parse_config(data: Mapping[str, object]) -> Config:
     )
     stash_table.finish()
 
+    tray_table = root.table("tray")
+    tray = TrayConfig(visible=tray_table.boolean("visible", defaults.tray.visible))
+    tray_table.finish()
+
     exclusions_table = root.table("exclusions")
     excluded_apps = exclusions_table.string_list("apps")
     exclusions_table.finish()
+
+    plugins_table = root.table("plugins")
+    enabled_plugins = plugins_table.string_list("enabled")
+    plugins_table.finish()
 
     monitors = _parse_monitors(root.table("monitors"))
     root.finish()
@@ -523,7 +573,9 @@ def parse_config(data: Mapping[str, object]) -> Config:
         theme=theme,
         preview=preview,
         stash=stash,
+        tray=tray,
         excluded_apps=excluded_apps,
+        enabled_plugins=enabled_plugins,
         monitors=monitors,
         custom_actions=custom_actions,
     )
@@ -558,3 +610,102 @@ def load_config(path: Path | None = None) -> Config:
         return parse_config(data)
     except ConfigError as error:
         raise ConfigError(f"{path}: {error}") from error
+
+
+def _toml_action(action: ActionSpec) -> str:
+    if isinstance(action, CycleAction):
+        return "[" + ", ".join(_toml_action(step) for step in action.steps) + "]"
+    return json.dumps(action.value if isinstance(action, Action) else action.name)
+
+
+def _toml_value(value: object) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return repr(value)
+    if isinstance(value, tuple | list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    return json.dumps(str(value))
+
+
+def dump_config(config: Config) -> str:
+    """Serialize a configuration as TOML, leaving out everything that is default.
+
+    `parse_config` turns the result back into an equal configuration. A
+    default key binding that is missing from `config` is written as "none",
+    which is how a user file disables it.
+    """
+    defaults = Config()
+    sections: list[tuple[str, list[str]]] = []
+
+    def plain(name: str, current: object, default: object, rename: dict[str, str]) -> None:
+        lines = []
+        for attribute in current.__dataclass_fields__:  # type: ignore[attr-defined]
+            value = getattr(current, attribute)
+            if isinstance(value, dict) or value == getattr(default, attribute):
+                continue
+            lines.append(f"{rename.get(attribute, attribute)} = {_toml_value(value)}")
+        sections.append((name, lines))
+
+    plain("trigger", config.trigger, defaults.trigger, {})
+    plain("radial", config.radial, defaults.radial, {})
+    sections.append(
+        (
+            "radial.sectors",
+            [
+                f"{direction.value} = {_toml_action(action)}"
+                for direction, action in config.radial.sectors.items()
+                if action != defaults.radial.sectors.get(direction)
+            ],
+        )
+    )
+    bindings = dict(config.keybindings)
+    for chord in defaults.keybindings:
+        bindings.setdefault(chord, Action.NONE)
+    sections.append(
+        (
+            "keybindings",
+            [
+                f"{json.dumps('+'.join(sorted(chord)))} = {_toml_action(action)}"
+                for chord, action in sorted(bindings.items(), key=lambda item: sorted(item[0]))
+                if action != defaults.keybindings.get(chord)
+            ],
+        )
+    )
+    plain("gaps", config.gaps, defaults.gaps, {})
+    plain("actions", config.actions, defaults.actions, {})
+    plain("animation", config.animation, defaults.animation, {})
+    plain("theme", config.theme, defaults.theme, {})
+    plain("preview", config.preview, defaults.preview, {})
+    plain("stash", config.stash, defaults.stash, {})
+    plain("tray", config.tray, defaults.tray, {})
+    if config.excluded_apps:
+        sections.append(("exclusions", [f"apps = {_toml_value(config.excluded_apps)}"]))
+    if config.enabled_plugins:
+        sections.append(("plugins", [f"enabled = {_toml_value(config.enabled_plugins)}"]))
+    for monitor, override in config.monitors.items():
+        lines = [
+            f"{attribute} = {_toml_value(getattr(override, attribute))}"
+            for attribute in ("outer_gap", "inner_gap", "almost_maximize_margin")
+            if getattr(override, attribute) is not None
+        ]
+        sections.append((f"monitors.{json.dumps(monitor)}", lines or [""]))
+    for name, custom in config.custom_actions.items():
+        region = custom.region
+        sections.append(
+            (
+                f"custom_actions.{name}",
+                [
+                    f"x = {region.x!r}",
+                    f"y = {region.y!r}",
+                    f"w = {region.width!r}",
+                    f"h = {region.height!r}",
+                ],
+            )
+        )
+
+    text = "# Ring settings. Options that are not listed use their default.\n"
+    for name, lines in sections:
+        if lines:
+            text += f"\n[{name}]\n" + "".join(f"{line}\n" for line in lines if line)
+    return text

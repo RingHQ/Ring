@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-COMMANDS = ("toggle", "press", "release", "cancel", "ping", "quit")
+COMMANDS = ("toggle", "press", "release", "cancel", "pause", "resume", "ping", "reload", "quit")
 
 
 class IpcError(RuntimeError):

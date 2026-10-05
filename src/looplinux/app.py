@@ -17,7 +17,8 @@ import socket
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QObject, QSocketNotifier, QTimer
-from PySide6.QtGui import QGuiApplication, QKeySequence
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import QApplication
 
 from looplinux.actions import (
     Action,
@@ -51,6 +52,9 @@ from looplinux.input.shortcut import GlobalShortcut, ShortcutError
 from looplinux.input.xkey import KeyListener, KeyListenerError
 from looplinux.ipc import IpcError, IpcServer, send_command
 from looplinux.overlay import Highlight, Overlay, OverlayError
+from looplinux.plugins import REGISTRY
+from looplinux.stats import Stats, default_stats_path
+from looplinux.tray import Tray
 
 log = logging.getLogger("looplinux")
 
@@ -58,6 +62,10 @@ log = logging.getLogger("looplinux")
 _KEY_SELECTION_SLACK = 12
 # Close a menu that was left open, e.g. because a release event got lost.
 _WATCHDOG_MS = 60_000
+
+
+# Exit status of `run` asking the caller to start it again with fresh settings.
+RESTART = 75
 
 
 class StartupError(RuntimeError):
@@ -98,6 +106,7 @@ class Controller(QObject):
         history: History,
         trigger_key: int,
         trigger_scan_code: int = -1,
+        stats: Stats | None = None,
     ) -> None:
         """Create the controller.
 
@@ -112,6 +121,9 @@ class Controller(QObject):
         self._history = history
         self._trigger_key = trigger_key
         self._trigger_scan_code = trigger_scan_code
+        self._stats = stats
+        # While paused the trigger does nothing.
+        self.paused = False
         self._session: _Session | None = None
         self._watchdog = QTimer(self)
         self._watchdog.setSingleShot(True)
@@ -128,7 +140,7 @@ class Controller(QObject):
 
     def press(self) -> None:
         """The trigger went down: show the menu for the active window."""
-        if self._session is not None:
+        if self._session is not None or self.paused:
             return
         try:
             # Must come first: the overlay takes keyboard focus once shown.
@@ -158,12 +170,17 @@ class Controller(QObject):
         )
         self._overlay.show(monitor, center)
         self._watchdog.start()
+        REGISTRY.emit("menu_opened", window=window)
 
     def release(self) -> None:
         """The trigger went up: apply the selected action."""
         session = self._close()
-        if session is None or session.leaf is Action.NONE:
+        if session is None:
             return
+        if session.leaf is Action.NONE:
+            REGISTRY.emit("menu_closed", applied=False)
+            return
+        rect = session.target
         try:
             if session.target is not None:
                 apply_frame(
@@ -177,7 +194,7 @@ class Controller(QObject):
                     session.area,
                 )
             else:
-                perform(
+                rect = perform(
                     session.leaf,
                     self._backend,
                     self._config,
@@ -187,10 +204,19 @@ class Controller(QObject):
                 )
         except (ActionError, BackendError) as error:
             log.warning("%s: %s", action_name(session.leaf), error)
+            REGISTRY.emit("menu_closed", applied=False)
+            return
+        if self._stats is not None:
+            self._stats.record(action_name(session.leaf))
+        REGISTRY.emit("menu_closed", applied=True)
+        REGISTRY.emit(
+            "action_applied", action=action_name(session.leaf), window=session.window, rect=rect
+        )
 
     def cancel(self) -> None:
         """Close the menu without touching the window."""
-        self._close()
+        if self._close() is not None:
+            REGISTRY.emit("menu_closed", applied=False)
 
     def toggle(self) -> None:
         if self._session is None:
@@ -390,7 +416,8 @@ def run(config: Config, backend_name: str | None = None) -> int:
 
     os.environ["QT_QPA_PLATFORM"] = "wayland"
     os.environ["QT_WAYLAND_SHELL_INTEGRATION"] = "layer-shell"
-    app = QGuiApplication(["looplinux"])
+    # A full QApplication, not just a GUI one: the tray icon needs it.
+    app = QApplication(["looplinux"])
     app.setQuitOnLastWindowClosed(False)
 
     backend = create_backend(backend_name)
@@ -411,6 +438,8 @@ def run(config: Config, backend_name: str | None = None) -> int:
         # The controller is created once the trigger is known, but the
         # trigger needs callbacks now.
         controllers: list[Controller] = []
+        stats = Stats(default_stats_path())
+        reload_requested = False
         held = config.trigger.key
         if config.trigger.use == "key":
             try:
@@ -418,14 +447,16 @@ def run(config: Config, backend_name: str | None = None) -> int:
                     held, lambda: controllers[0].press(), lambda: controllers[0].release()
                 )
                 controllers.append(
-                    Controller(config, backend, overlay, history, -1, trigger.keycode)
+                    Controller(config, backend, overlay, history, -1, trigger.keycode, stats)
                 )
             except KeyListenerError as error:
                 log.warning("%s; falling back to the shortcut %s", error, config.trigger.shortcut)
         if trigger is None:
             held = config.trigger.shortcut
             combined, trigger_key = _parse_shortcut(held)
-            controllers.append(Controller(config, backend, overlay, history, trigger_key))
+            controllers.append(
+                Controller(config, backend, overlay, history, trigger_key, stats=stats)
+            )
             try:
                 trigger = GlobalShortcut(
                     combined, held, controllers[0].press, controllers[0].release
@@ -443,8 +474,24 @@ def run(config: Config, backend_name: str | None = None) -> int:
         trigger_notifier = QSocketNotifier(trigger.fileno(), QSocketNotifier.Type.Read)
         trigger_notifier.activated.connect(on_trigger_activity)
 
+        tray: Tray | None = None
+        if config.tray.visible:
+            tray = Tray(
+                config, stats, lambda paused: setattr(controller, "paused", paused), app.quit
+            )
+            if not tray.show():
+                log.info("this desktop has no system tray; running without the icon")
+                tray = None
+
         def on_command(command: str) -> str:
-            if command == "quit":
+            nonlocal reload_requested
+            if command in ("pause", "resume"):
+                controller.paused = command == "pause"
+                if tray is not None:
+                    tray.set_paused(controller.paused)
+                return "ok"
+            if command in ("quit", "reload"):
+                reload_requested = command == "reload"
                 # Deferred so the answer is sent before the loop stops.
                 QTimer.singleShot(0, app.quit)
             elif command != "ping":
@@ -467,7 +514,8 @@ def run(config: Config, backend_name: str | None = None) -> int:
 
         log.info("ready: hold %s to open the radial menu", held)
         try:
-            return int(app.exec())
+            code = int(app.exec())
+            return RESTART if reload_requested else code
         finally:
             controller.cancel()
             signal.set_wakeup_fd(-1)

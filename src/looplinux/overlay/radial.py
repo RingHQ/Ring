@@ -90,7 +90,9 @@ class Overlay(QObject):
         self._preview_rect: QRectF | None = None
         wants_blur = config.theme.blur or config.preview.blur
         self._blur = _load_blur() if wants_blur else None
-        self._blur_menu = config.theme.blur and self._blur is not None
+        self._menu_visible = config.radial.visible
+        self._preview_visible = config.preview.visible
+        self._blur_menu = config.theme.blur and self._blur is not None and self._menu_visible
         self._blur_preview = config.preview.blur and self._blur is not None
         if wants_blur and self._blur is None:
             log.info("background blur is not available on this system")
@@ -116,8 +118,21 @@ class Overlay(QObject):
         self._set("menuRadius", self._radius)
         self._set("menuThickness", self._thickness)
         self._set("filledScale", _FILLED_SCALE)
+        ring = QColor(config.theme.ring_color)
+        opacity = config.theme.ring_opacity
+        # Without blur behind it the ring needs more body to stay readable.
+        ring.setAlphaF(opacity if self._blur_menu else 1 - (1 - opacity) * 0.28)
+        border = accent
+        if config.preview.border_color != "accent":
+            border = QColor(config.preview.border_color)
+        fill = QColor(config.preview.fill_color)
+        fill.setAlphaF(config.preview.fill_opacity)
         self._set("accent", accent)
         self._set("accent2", gradient)
+        self._set("ringColor", ring)
+        self._set("menuShown", self._menu_visible)
+        self._set("previewBorderColor", border)
+        self._set("previewFill", fill)
         self._set("menuBlurred", self._blur_menu)
         self._set("previewBlurred", self._blur_preview)
         self._set("previewRadius", self._preview.corner_radius)
@@ -169,7 +184,8 @@ class Overlay(QObject):
         self._highlight = highlight
         self._set("highlight", int(highlight))
 
-        if target is None:
+        if target is None or not self._preview_visible:
+            target = None
             self._set("previewVisible", False)
         else:
             preview = target.inset(self._preview.padding)

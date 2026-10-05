@@ -12,6 +12,7 @@ from looplinux.actions import (
     ActionSpec,
     CycleAction,
     Leaf,
+    PluginAction,
     Rect,
     action_name,
     cycle_monitor,
@@ -32,6 +33,7 @@ from looplinux.backends.base import (
 )
 from looplinux.config import ANIMATIONS, Config
 from looplinux.history import History
+from looplinux.plugins import REGISTRY, ActionContext
 
 
 class ActionError(RuntimeError):
@@ -182,6 +184,35 @@ def _other_monitor(action: Action, home: Monitor, monitors: Sequence[Monitor]) -
     return monitors[target]
 
 
+def _perform_plugin_action(
+    action: PluginAction,
+    backend: WindowBackend,
+    config: Config,
+    history: History,
+    window: Window,
+    monitor: Monitor | None,
+) -> Rect | None:
+    registered = REGISTRY.actions.get(action.name)
+    if registered is None:
+        plugin = action.name.split(".")[0]
+        reason = REGISTRY.errors.get(plugin, "the plugin is not enabled or not installed")
+        raise ActionError(f"The action '{action.name}' is not available: {reason}.")
+    monitor = monitor or monitor_for_rect(window.geometry, backend.get_monitors())
+    area = backend.get_work_area(monitor)
+    try:
+        target = registered.handler(ActionContext(window, monitor, area, backend))
+    except (ActionError, BackendError):
+        raise
+    except Exception as error:
+        raise ActionError(f"The plugin action '{action.name}' failed: {error}") from error
+    if target is None:
+        return None
+    if not isinstance(target, Rect) or target.width <= 0 or target.height <= 0:
+        raise ActionError(f"The plugin action '{action.name}' returned an invalid frame.")
+    apply_frame(action, target, backend, config, history, window, monitor, area)
+    return target
+
+
 def perform(
     action: ActionSpec,
     backend: WindowBackend,
@@ -214,6 +245,9 @@ def perform(
             advance=True,
             restart=config.actions.cycle_restart,
         )
+
+    if isinstance(action, PluginAction):
+        return _perform_plugin_action(action, backend, config, history, window, monitor)
 
     match action:
         case Action.FULLSCREEN:

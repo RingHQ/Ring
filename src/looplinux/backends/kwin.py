@@ -235,6 +235,11 @@ return null;
 _STASH_WATCHER = """
 var entries = args.entries;
 var shown = {};
+// When each window was last hidden. Focus often comes straight back to a
+// window that was just stashed, for instance when the radial menu closes;
+// that must not count as the user asking for it.
+var hiddenAt = {};
+var GRACE_MS = 700;
 
 function lookup(id) {
     try {
@@ -276,6 +281,7 @@ function reveal(entry, w) {
 }
 function hide(entry, w, refocus) {
     shown[entry.window_id] = false;
+    hiddenAt[entry.window_id] = Date.now();
     moveTo(w, entry.stashed, args.animation);
     if (refocus && args.focus && workspace.activeWindow === w) {
         focusAnother(w);
@@ -339,16 +345,34 @@ settle.timeout.connect(check);
 workspace.cursorPosChanged.connect(function () {
     settle.start();
 });
+var handBack = new QTimer();
+handBack.singleShot = true;
+handBack.interval = 1;
+var handBackFrom = null;
+handBack.timeout.connect(function () {
+    if (handBackFrom && !handBackFrom.deleted && workspace.activeWindow === handBackFrom) {
+        focusAnother(handBackFrom);
+    }
+});
 workspace.windowActivated.connect(function (w) {
     if (!w) {
         return;
     }
     var id = String(w.internalId);
     for (var i = 0; i < entries.length; i++) {
-        if (entries[i].window_id === id && !shown[id]) {
-            hideOthers(entries[i]);
-            reveal(entries[i], w);
+        if (entries[i].window_id !== id || shown[id]) {
+            continue;
         }
+        if (Date.now() - (hiddenAt[id] || 0) < GRACE_MS) {
+            // Not from inside this handler: KWin is still switching focus.
+            if (args.focus) {
+                handBackFrom = w;
+                handBack.start();
+            }
+            return;
+        }
+        hideOthers(entries[i]);
+        reveal(entries[i], w);
     }
 });
 return entries.length;

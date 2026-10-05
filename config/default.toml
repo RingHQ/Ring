@@ -45,6 +45,7 @@ shortcut = "Meta+X"
 cancel_key = "KEY_ESC"
 
 [radial]
+visible = true    # false: no ring, only the preview
 radius = 50       # outer radius of the ring in pixels
 thickness = 22    # width of the ring
 
@@ -133,18 +134,34 @@ shift_focus = true    # focus the window when it slides out, another when it hid
 [theme]
 accent_color = "system"    # "system" follows the desktop accent color; or #RRGGBB
 gradient_color = ""        # second color for a gradient; empty for a solid accent
+ring_color = "#1c1c1f"     # the ring itself, where it is not lit up
+ring_opacity = 0.5         # 0 = invisible, 1 = solid
 blur = true                # frosted glass behind the radial menu
 
 [preview]
+visible = true              # false: no preview, only the ring
 padding = 10                # space between the preview and the area it stands for
 corner_radius = 10
 border_thickness = 4
+border_color = "accent"     # "accent", or its own color as #RRGGBB
+fill_color = "#000000"      # tint inside the preview
+fill_opacity = 0.15         # 0 = clear, 1 = solid
 blur = false                # frosted glass behind the preview
 start = "action_center"     # where it grows from: action_center, radial_menu, screen_center
+
+# The icon in the system tray: pause Ring, open the settings, see the counter.
+[tray]
+visible = true
 
 [exclusions]
 # Window classes / app ids that loop-linux never touches (case-insensitive).
 apps = []
+
+# Plugins add actions and react to what Ring does. They are Python files in
+# ~/.config/looplinux/plugins/ and run with your full permissions, so only
+# the ones named here are loaded. Their actions are called "<plugin>.<action>".
+[plugins]
+enabled = []
 
 # Per-monitor overrides, keyed by output name (see `xrandr` or your compositor).
 #

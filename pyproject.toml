@@ -39,13 +39,12 @@ dev = [
 packages = ["src/looplinux"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
 pythonpath = ["src"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "tests"]
+src = ["src"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "PT", "RUF"]
@@ -54,7 +53,7 @@ select = ["E", "F", "W", "I", "N", "UP", "B", "SIM", "C4", "PT", "RUF"]
 python_version = "3.12"
 strict = true
 mypy_path = "src"
-files = ["src", "tests"]
+files = ["src"]
 
 [[tool.mypy.overrides]]
 module = ["jeepney", "jeepney.*", "PySide6", "PySide6.*", "Xlib", "Xlib.*"]
@@ -62,6 +61,6 @@ ignore_missing_imports = true
 
 # Distribution builds of PySide6 ship without type stubs.
 [[tool.mypy.overrides]]
-module = ["looplinux.app", "looplinux.overlay.radial", "test_app"]
+module = ["looplinux.app", "looplinux.overlay.radial", "looplinux.settings", "looplinux.tray"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false

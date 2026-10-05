@@ -204,7 +204,14 @@ class CustomAction:
     region: FractionRect
 
 
-type Leaf = Action | CustomAction
+@dataclass(frozen=True, slots=True)
+class PluginAction:
+    """An action provided by a plugin, known here only by its name."""
+
+    name: str
+
+
+type Leaf = Action | CustomAction | PluginAction
 """An action that does one thing, as opposed to a cycle of them."""
 
 
@@ -219,14 +226,14 @@ class CycleAction:
             raise ValueError("a cycle needs at least one action")
 
 
-type ActionSpec = Action | CustomAction | CycleAction
+type ActionSpec = Action | CustomAction | PluginAction | CycleAction
 
 
 def action_name(action: ActionSpec) -> str:
     """Return the name an action goes by in the config file and in logs."""
     if isinstance(action, CycleAction):
         return "cycle(" + ", ".join(action_name(step) for step in action.steps) + ")"
-    return action.name if isinstance(action, CustomAction) else action.value
+    return action.value if isinstance(action, Action) else action.name
 
 
 _THIRD = 1 / 3
@@ -359,7 +366,7 @@ def radial_angle(action: Leaf) -> float | None:
     the center of the screen to the center of the area the action snaps to.
     None means the ring shows no segment for this action.
     """
-    if isinstance(action, CustomAction) or action in _FILLS_RADIAL_MENU:
+    if not isinstance(action, Action) or action in _FILLS_RADIAL_MENU:
         return None
     if action in _STASH_ANGLES:
         return _STASH_ANGLES[action]
@@ -751,6 +758,8 @@ def target_rect(
     """
     if isinstance(action, CustomAction):
         return fraction_rect(area, action.region, gaps)
+    if isinstance(action, PluginAction):
+        return None
     if action in FRACTIONS:
         return fraction_rect(area, FRACTIONS[action], gaps)
     bounds = area.inset(gaps.outer)

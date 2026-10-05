@@ -7,17 +7,17 @@ Rectangle {
     id: preview
 
     property bool shown: false
-    property color accent: "#5e9cff"
+    property color borderColor: "#5e9cff"
+    property color fillColor: Qt.rgba(0, 0, 0, 0.15)
     property int cornerRadius: 10
     property int borderThickness: 4
-    property bool blurred: false
     property var curve: [0.22, 1, 0.47, 1, 1, 1]
     property int duration: 250
 
     opacity: shown ? 1 : 0
     radius: cornerRadius
-    color: blurred ? Qt.rgba(accent.r, accent.g, accent.b, 0.1) : Qt.rgba(0, 0, 0, 0.15)
-    border.color: accent
+    color: fillColor
+    border.color: borderColor
     border.width: borderThickness
 
     // A hairline inside the border, as in Loop.

@@ -30,6 +30,10 @@ Window {
 
     property color accent: "#5e9cff"
     property color accent2: accent
+    property color ringColor: Qt.rgba(0.11, 0.11, 0.12, 0.5)
+    property bool menuShown: true
+    property color previewBorderColor: accent
+    property color previewFill: Qt.rgba(0, 0, 0, 0.15)
     // True when the compositor blurs what is behind the ring / the preview.
     property bool menuBlurred: false
     property bool previewBlurred: false
@@ -103,10 +107,10 @@ Window {
         width: root.previewWidth
         height: root.previewHeight
         shown: root.previewVisible
-        accent: root.accent
+        borderColor: root.previewBorderColor
+        fillColor: root.previewFill
         cornerRadius: root.previewRadius
         borderThickness: root.previewBorder
-        blurred: root.previewBlurred
         curve: root.previewCurve
         duration: root.animate ? root.previewMs : 0
 
@@ -129,9 +133,10 @@ Window {
         highlight: root.highlight
         angle: root.angle
         angleAnimated: root.animate && root.angleAnimated
+        visible: root.menuShown
         accent: root.accent
         accent2: root.accent2
-        blurred: root.menuBlurred
+        ringColor: root.ringColor
         angleMs: root.angleMs
         sizeMs: root.animate ? root.sizeMs : 0
     }

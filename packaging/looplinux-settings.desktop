@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Ring Settings
+GenericName=Window Snapper Settings
+Comment=Configure the Ring radial window snapper
+Exec=looplinux settings
+Icon=looplinux
+Categories=Settings;Utility;
+Keywords=ring;loop;window;snap;tile;
