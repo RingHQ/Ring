@@ -9,8 +9,8 @@ from PySide6.QtCore import QObject, QRectF, Qt
 from PySide6.QtGui import QAction, QColor, QGuiApplication, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from looplinux.config import Config
-from looplinux.stats import Stats
+from ring.config import Config
+from ring.stats import Stats
 
 
 def ring_icon(accent: QColor, *, paused: bool = False) -> QIcon:
@@ -41,7 +41,7 @@ def open_settings() -> None:
     environment.pop("QT_WAYLAND_SHELL_INTEGRATION", None)
     environment.pop("QT_QPA_PLATFORM", None)
     subprocess.Popen(
-        [sys.executable, "-m", "looplinux", "settings"],
+        [sys.executable, "-m", "ring", "settings"],
         env=environment,
         start_new_session=True,
         stdin=subprocess.DEVNULL,

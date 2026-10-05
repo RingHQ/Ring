@@ -3,7 +3,7 @@
 import contextlib
 from collections.abc import Sequence
 
-from looplinux.actions import (
+from ring.actions import (
     DESKTOP_ACTIONS,
     INCREMENTAL_ACTIONS,
     SCREEN_ACTIONS,
@@ -23,7 +23,7 @@ from looplinux.actions import (
     stash_frames,
     target_rect,
 )
-from looplinux.backends.base import (
+from ring.backends.base import (
     Animation,
     BackendError,
     Monitor,
@@ -31,9 +31,9 @@ from looplinux.backends.base import (
     Window,
     WindowBackend,
 )
-from looplinux.config import ANIMATIONS, Config
-from looplinux.history import History
-from looplinux.plugins import REGISTRY, ActionContext
+from ring.config import ANIMATIONS, Config
+from ring.history import History
+from ring.plugins import REGISTRY, ActionContext
 
 
 class ActionError(RuntimeError):
@@ -106,10 +106,16 @@ def compute_target(
     )
 
 
+def watch_stash(backend: WindowBackend, history: History, hide: Sequence[str] = ()) -> None:
+    """Hand the stashed windows to the backend; forget those that were closed."""
+    for window_id in backend.watch_stash(history.stashed(), hide=hide):
+        history.unstash(window_id)
+
+
 def _unmanage(backend: WindowBackend, history: History, window: Window) -> None:
     """Stop treating the window as stashed, because something else moved it."""
     if history.unstash(window.id) is not None:
-        backend.watch_stash(history.stashed())
+        watch_stash(backend, history)
 
 
 def _stash(
@@ -142,7 +148,7 @@ def _stash(
 
     history.record(window.id, window.geometry)
     history.set_stash(StashEntry(window.id, action.value, monitor.name, restore, revealed, stashed))
-    backend.watch_stash(history.stashed(), hide=[window.id])
+    watch_stash(backend, history, hide=[window.id])
 
 
 def apply_frame(
@@ -184,6 +190,20 @@ def _other_monitor(action: Action, home: Monitor, monitors: Sequence[Monitor]) -
     return monitors[target]
 
 
+def screen_target(
+    action: Action,
+    backend: WindowBackend,
+    window: Window,
+    monitors: Sequence[Monitor] | None = None,
+) -> tuple[Monitor, Rect, Rect]:
+    """Return where a screen action sends `window`: monitor, work area, frame."""
+    monitors = backend.get_monitors() if monitors is None else monitors
+    home = monitor_for_rect(window.geometry, monitors)
+    monitor = _other_monitor(action, home, monitors)
+    area = backend.get_work_area(monitor)
+    return monitor, area, move_to_monitor_rect(window.geometry, backend.get_work_area(home), area)
+
+
 def _perform_plugin_action(
     action: PluginAction,
     backend: WindowBackend,
@@ -200,7 +220,8 @@ def _perform_plugin_action(
     monitor = monitor or monitor_for_rect(window.geometry, backend.get_monitors())
     area = backend.get_work_area(monitor)
     try:
-        target = registered.handler(ActionContext(window, monitor, area, backend))
+        gaps = config.gaps_for(monitor.name)
+        target = registered.handler(ActionContext(window, monitor, area, backend, gaps))
     except (ActionError, BackendError):
         raise
     except Exception as error:
@@ -280,24 +301,19 @@ def perform(
         entry = history.unstash(window.id)
         if entry is None:
             raise ActionError("This window is not stashed.")
-        backend.watch_stash(history.stashed())
+        watch_stash(backend, history)
         backend.set_geometry(window, entry.restore)
         return entry.restore
     if action in DESKTOP_ACTIONS:
         backend.move_to_desktop(window, 1 if action is Action.NEXT_DESKTOP else -1)
         return None
 
-    monitors = backend.get_monitors()
-    home = monitor_for_rect(window.geometry, monitors)
+    target: Rect | None
     if action in SCREEN_ACTIONS:
         assert isinstance(action, Action)
-        monitor = _other_monitor(action, home, monitors)
-        area = backend.get_work_area(monitor)
-        target: Rect | None = move_to_monitor_rect(
-            window.geometry, backend.get_work_area(home), area
-        )
+        monitor, area, target = screen_target(action, backend, window)
     else:
-        monitor = monitor or home
+        monitor = monitor or monitor_for_rect(window.geometry, backend.get_monitors())
         area = backend.get_work_area(monitor)
         target = compute_target(action, backend, config, window, monitor, area)
     if target is None:

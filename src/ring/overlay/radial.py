@@ -2,7 +2,9 @@
 
 The overlay is one transparent layer-shell surface covering the monitor under
 the cursor. It is drawn in QML (`Overlay.qml`, `RadialMenu.qml`,
-`Preview.qml`); this class feeds it state and forwards its input events.
+`Preview.qml`); this class feeds it state and forwards its input events. A
+second surface (`RemotePreview.qml`) shows the preview when the target is on
+another monitor.
 
 Sizes, colors and animation curves follow Loop's RadialMenuView, PreviewView
 and AnimationConfiguration.
@@ -19,13 +21,14 @@ from PySide6.QtCore import QObject, QRectF, QUrl, Signal, Slot
 from PySide6.QtGui import QColor, QGuiApplication, QPainterPath, QRegion
 from PySide6.QtQml import QQmlApplicationEngine
 
-from looplinux.actions import Rect
-from looplinux.backends.base import Monitor
-from looplinux.config import ANIMATIONS, Config
+from ring.actions import Rect
+from ring.backends.base import Monitor
+from ring.config import ANIMATIONS, Config
 
-log = logging.getLogger("looplinux")
+log = logging.getLogger("ring")
 
 _QML = Path(__file__).parent / "Overlay.qml"
+_REMOTE_QML = Path(__file__).parent / "RemotePreview.qml"
 
 _ANGLE_MS = 200
 _APPEAR_MS = 100
@@ -84,6 +87,9 @@ class Overlay(QObject):
         self._preview = config.preview
         self._center = (0, 0)
         self._screen_size = (0, 0)
+        # The monitor the ring is on, and the other one showing the preview.
+        self._monitor: str | None = None
+        self._remote_monitor: str | None = None
         self._angle = 0.0
         self._highlight = Highlight.NONE
         self._preview_shown = False
@@ -100,13 +106,14 @@ class Overlay(QObject):
         self._engine = QQmlApplicationEngine()
         self._engine.rootContext().setContextProperty("bridge", self)
         self._engine.load(QUrl.fromLocalFile(str(_QML)))
+        self._engine.load(QUrl.fromLocalFile(str(_REMOTE_QML)))
         roots = self._engine.rootObjects()
-        if not roots:
+        if len(roots) < 2:
             raise OverlayError(
                 "Could not create the overlay window. It needs the LayerShellQt QML module "
                 "(Arch: layer-shell-qt) and the distribution's PySide6 (Arch: pyside6)."
             )
-        self._window = roots[0]
+        self._window, self._remote = roots[0], roots[1]
 
         if config.theme.accent_color == "system":
             accent = QGuiApplication.palette().highlight().color()
@@ -121,7 +128,9 @@ class Overlay(QObject):
         ring = QColor(config.theme.ring_color)
         opacity = config.theme.ring_opacity
         # Without blur behind it the ring needs more body to stay readable.
-        ring.setAlphaF(opacity if self._blur_menu else 1 - (1 - opacity) * 0.28)
+        self._ring_alpha = opacity if self._blur_menu else 1 - (1 - opacity) * 0.28
+        ring.setAlphaF(self._ring_alpha)
+        self._border_follows_accent = config.preview.border_color == "accent"
         border = accent
         if config.preview.border_color != "accent":
             border = QColor(config.preview.border_color)
@@ -131,14 +140,15 @@ class Overlay(QObject):
         self._set("accent2", gradient)
         self._set("ringColor", ring)
         self._set("menuShown", self._menu_visible)
-        self._set("previewBorderColor", border)
-        self._set("previewFill", fill)
         self._set("menuBlurred", self._blur_menu)
         self._set("previewBlurred", self._blur_preview)
-        self._set("previewRadius", self._preview.corner_radius)
-        self._set("previewBorder", self._preview.border_thickness)
-        self._set("previewCurve", [*curve, 1.0, 1.0])
-        self._set("previewMs", preview_ms)
+        for window in (self._window, self._remote):
+            window.setProperty("previewBorderColor", border)
+            window.setProperty("previewFill", fill)
+            window.setProperty("previewRadius", self._preview.corner_radius)
+            window.setProperty("previewBorder", self._preview.border_thickness)
+            window.setProperty("previewCurve", [*curve, 1.0, 1.0])
+            window.setProperty("previewMs", preview_ms)
         self._set("sizeMs", size_ms)
         self._set("angleMs", 0 if instant else _ANGLE_MS)
         self._set("appearMs", 0 if instant else _APPEAR_MS)
@@ -151,6 +161,8 @@ class Overlay(QObject):
             screen = QGuiApplication.primaryScreen()
         self._center = center
         self._screen_size = (monitor.geometry.width, monitor.geometry.height)
+        self._monitor = monitor.name
+        self._hide_remote()
         self._highlight = Highlight.NONE
         self._preview_shown = False
         self._preview_rect = None
@@ -167,11 +179,19 @@ class Overlay(QObject):
         self._apply_blur()
         self._set("animate", True)
 
-    def select(self, highlight: Highlight, angle: float, target: Rect | None) -> None:
+    def select(
+        self,
+        highlight: Highlight,
+        angle: float,
+        target: Rect | None,
+        monitor: Monitor | None = None,
+    ) -> None:
         """Update the ring and move the preview to `target`.
 
         `angle` is the compass bearing of the highlighted segment in degrees
         clockwise from north; it only matters for `Highlight.SEGMENT`.
+        `target` is local to `monitor`, which defaults to the monitor the
+        ring is on.
         """
         if highlight is Highlight.SEGMENT:
             # Turn the short way round; jump instead when the segment appears
@@ -187,27 +207,82 @@ class Overlay(QObject):
         if target is None or not self._preview_visible:
             target = None
             self._set("previewVisible", False)
+            self._hide_remote()
+        elif monitor is not None and monitor.name != self._monitor:
+            self._show_remote(monitor, preview=target.inset(self._preview.padding))
+            target = None
+            self._set("previewVisible", False)
         else:
+            self._hide_remote()
             preview = target.inset(self._preview.padding)
             if not self._preview_shown:
                 self._set("animate", False)
-                self._set_preview_rect(self._starting_frame(preview))
+                self._set_preview_rect(self._window, self._starting_frame(preview))
                 self._set("animate", True)
-            self._set_preview_rect(preview)
+            self._set_preview_rect(self._window, preview)
             self._set("previewVisible", True)
         self._preview_shown = target is not None
         self._apply_blur()
 
     def hide(self) -> None:
         self._window.hide()
+        self._hide_remote()
 
-    def _starting_frame(self, preview: Rect) -> Rect:
-        """Return the frame the preview grows out of when it first appears."""
+    def set_colors(self, accent: str | None, gradient: str | None, ring: str | None) -> None:
+        """Recolor the ring and the preview border; None leaves a color as it is.
+
+        For plugins (`PluginApi.set_colors`). The colors last until the
+        service restarts.
+        """
+        if accent is not None:
+            self._set("accent", QColor(accent))
+            self._set("accent2", QColor(gradient or accent))
+            if self._border_follows_accent:
+                for window in (self._window, self._remote):
+                    window.setProperty("previewBorderColor", QColor(accent))
+        elif gradient is not None:
+            self._set("accent2", QColor(gradient))
+        if ring is not None:
+            color = QColor(ring)
+            color.setAlphaF(self._ring_alpha)
+            self._set("ringColor", color)
+
+    def _show_remote(self, monitor: Monitor, preview: Rect) -> None:
+        """Show the preview on a monitor other than the ring's. It is not blurred."""
+        remote = self._remote
+        if self._remote_monitor != monitor.name:
+            self._hide_remote()
+            screen = next((s for s in QGuiApplication.screens() if s.name() == monitor.name), None)
+            if screen is None:
+                return
+            size = (monitor.geometry.width, monitor.geometry.height)
+            remote.setScreen(screen)
+            remote.setGeometry(screen.geometry())
+            self._set_preview_rect(remote, self._starting_frame(preview, size))
+            remote.show()
+            remote.setProperty("animate", True)
+            self._remote_monitor = monitor.name
+        self._set_preview_rect(remote, preview)
+        remote.setProperty("previewVisible", True)
+
+    def _hide_remote(self) -> None:
+        self._remote.setProperty("animate", False)
+        self._remote.setProperty("previewVisible", False)
+        self._remote.hide()
+        self._remote_monitor = None
+
+    def _starting_frame(self, preview: Rect, other_screen: tuple[int, int] | None = None) -> Rect:
+        """Return the frame the preview grows out of when it first appears.
+
+        `other_screen` is the size of the monitor it appears on, if that is
+        not the one with the ring.
+        """
+        screen = other_screen or self._screen_size
         match self._preview.start:
-            case "radial_menu":
+            case "radial_menu" if other_screen is None:
                 return Rect(self._center[0], self._center[1], 1, 1)
             case "screen_center":
-                return Rect(self._screen_size[0] // 2, self._screen_size[1] // 2, 1, 1)
+                return Rect(screen[0] // 2, screen[1] // 2, 1, 1)
             case _:
                 width, height = round(preview.width * 0.8), round(preview.height * 0.8)
                 return Rect(
@@ -220,11 +295,12 @@ class Overlay(QObject):
     def _set(self, name: str, value: object) -> None:
         self._window.setProperty(name, value)
 
-    def _set_preview_rect(self, rect: Rect) -> None:
-        self._set("previewX", rect.x)
-        self._set("previewY", rect.y)
-        self._set("previewWidth", rect.width)
-        self._set("previewHeight", rect.height)
+    @staticmethod
+    def _set_preview_rect(window: Any, rect: Rect) -> None:
+        window.setProperty("previewX", rect.x)
+        window.setProperty("previewY", rect.y)
+        window.setProperty("previewWidth", rect.width)
+        window.setProperty("previewHeight", rect.height)
 
     def _apply_blur(self) -> None:
         if self._blur is None:

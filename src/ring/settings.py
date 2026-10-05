@@ -29,6 +29,7 @@ from PySide6.QtGui import (
     QPalette,
     QPen,
 )
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -55,8 +56,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from looplinux import __version__
-from looplinux.actions import (
+from ring import __version__, catalog
+from ring.actions import (
     FRACTIONS,
     SECTORS,
     Action,
@@ -68,8 +69,9 @@ from looplinux.actions import (
     Leaf,
     action_name,
 )
-from looplinux.config import (
+from ring.config import (
     ANIMATION_STYLES,
+    MAX_TRIGGER_DELAY_MS,
     PREVIEW_STARTS,
     ActionsConfig,
     AnimationConfig,
@@ -87,12 +89,12 @@ from looplinux.config import (
     parse_config,
     user_config_path,
 )
-from looplinux.input.keys import EVDEV_CODES, evdev_name
-from looplinux.ipc import IpcError, send_command
-from looplinux.plugins import REGISTRY, discover, load_plugins, plugin_directory
-from looplinux.stats import Stats, default_stats_path
+from ring.input.keys import EVDEV_CODES, evdev_name
+from ring.ipc import IpcError, send_command
+from ring.plugins import REGISTRY, discover, load_plugins, plugin_directory
+from ring.stats import Stats, default_stats_path
 
-_SERVICE = "looplinux.service"
+_SERVICE = "ring.service"
 _SECTOR_LABELS = {
     Direction.CENTER: "Inside the ring",
     Direction.NORTH: "Up",
@@ -511,6 +513,7 @@ class SettingsWindow(QWidget):
             self._sidebar.addItem(QListWidgetItem(QIcon.fromTheme(icon), title))
             self._pages.addWidget(build())
         self._sidebar.currentRowChanged.connect(self._pages.setCurrentIndex)
+        self._pages.currentChanged.connect(self._page_shown)
         self._sidebar.setCurrentRow(0)
 
         brand = QLabel("Ring")
@@ -566,9 +569,14 @@ class SettingsWindow(QWidget):
         self._shortcut.setMaximumSequenceLength(1)
         self._use.currentIndexChanged.connect(self._sync_trigger)
         self._sync_trigger()
+        self._delay = _spin(trigger.delay_ms, 0, MAX_TRIGGER_DELAY_MS, " ms")
+        self._delay.setSingleStep(50)
+        self._double_tap = QCheckBox("Press twice quickly, and hold the second press")
+        self._double_tap.setChecked(trigger.double_tap)
         hint = QLabel(
-            "A single key keeps working in applications, so pick one you do not use for "
-            "shortcuts. A keyboard shortcut is taken over completely while Ring runs."
+            "A single key keeps working in applications. Give it a delay, or pick one you "
+            "do not use for shortcuts. A keyboard shortcut is taken over completely while "
+            "Ring runs."
         )
         hint.setWordWrap(True)
 
@@ -577,6 +585,8 @@ class SettingsWindow(QWidget):
         form.addRow("Hold to open the ring:", self._use)
         form.addRow("Key:", self._key)
         form.addRow("Shortcut:", self._shortcut)
+        form.addRow("Hold for:", self._delay)
+        form.addRow(self._double_tap)
         form.addRow(hint)
 
         self._style = _combo(
@@ -596,7 +606,7 @@ class SettingsWindow(QWidget):
         self._autostart.setChecked(_service_state("is-enabled") == "enabled")
         self._autostart.setEnabled(self._autostart_known)
         if not self._autostart_known:
-            self._autostart.setToolTip("The looplinux systemd user service is not installed.")
+            self._autostart.setToolTip("The Ring systemd user service is not installed.")
         system = Card("System")
         system_layout = QVBoxLayout(system.body)
         system_layout.addWidget(self._tray)
@@ -818,38 +828,35 @@ class SettingsWindow(QWidget):
         )
 
     def _plugins_tab(self) -> QWidget:
-        directory = plugin_directory(self._path.parent)
-        found = {plugin.name: plugin for plugin in discover(directory)}
-        self._plugin_boxes: dict[str, QCheckBox] = {}
-        card = Card("Installed plugins")
+        self._plugin_directory = plugin_directory(self._path.parent)
+        directory = self._plugin_directory
+        self._enabled = list(self._config.enabled_plugins)
+        # What the plugin repository offers; None until it has been fetched.
+        self._catalog: dict[str, catalog.CatalogPlugin] | None = None
+        self._catalog_loaded = False
+        self._network = QNetworkAccessManager(self)
+        # Plugin name -> the buttons in its row, by their text.
+        self._plugin_buttons: dict[str, dict[str, QPushButton]] = {}
+
+        card = Card("Plugins")
         layout = QVBoxLayout(card.body)
-        for name in sorted({*found, *self._config.enabled_plugins}):
-            plugin = found.get(name)
-            box = QCheckBox(name)
-            box.setChecked(name in self._config.enabled_plugins)
-            self._plugin_boxes[name] = box
-            layout.addWidget(box)
-            if plugin is None:
-                detail = "Not found. It stays in the list until you untick it."
-            elif name in REGISTRY.errors:
-                detail = f"Could not be loaded: {REGISTRY.errors[name]}"
-            else:
-                detail = plugin.description or plugin.source
-            note = QLabel(detail)
-            note.setObjectName("hint")
-            note.setWordWrap(True)
-            note.setContentsMargins(26, 0, 0, 8)
-            layout.addWidget(note)
-        if not self._plugin_boxes:
-            empty = QLabel("No plugins found.")
-            empty.setObjectName("hint")
-            layout.addWidget(empty)
+        self._plugin_rows = QVBoxLayout()
+        self._catalog_status = QLabel()
+        self._catalog_status.setObjectName("hint")
+        self._catalog_status.setWordWrap(True)
+        self._catalog_refresh = QPushButton("Look for plugins again")
+        self._catalog_refresh.clicked.connect(self.load_catalog)
+        layout.addLayout(self._plugin_rows)
+        layout.addWidget(self._catalog_status)
+        layout.addWidget(self._catalog_refresh, 0, Qt.AlignmentFlag.AlignLeft)
+        self._fill_plugins()
 
         hint = QLabel(
-            "Plugins add actions to Ring and can react to what it does. They are Python "
-            "files in the plugins folder and run with your full permissions, so only tick "
-            "plugins you trust. Their actions show up in the Ring and Keys pages after "
-            "you apply and reopen this window."
+            f"Plugins add actions to Ring and can react to what it does. The list comes from "
+            f"{catalog.REPOSITORY} and from your plugins folder. A plugin runs with your "
+            "full permissions, so only enable what you trust. Enabling and disabling take "
+            "effect at once; a plugin's actions show up in the Ring and Keys pages after you "
+            "reopen this window."
         )
         hint.setObjectName("hint")
         hint.setWordWrap(True)
@@ -864,7 +871,172 @@ class SettingsWindow(QWidget):
         about_layout = QVBoxLayout(about.body)
         about_layout.addWidget(hint)
         about_layout.addWidget(folder, 0, Qt.AlignmentFlag.AlignLeft)
-        return _page("Plugins", "Extend Ring with your own actions.", card, about)
+        self._plugins_page = _page("Plugins", "Extend Ring with your own actions.", card, about)
+        return self._plugins_page
+
+    def _fill_plugins(self) -> None:
+        """List every plugin, installed or on offer, with what can be done to it.
+
+        Not installed: Install. Installed: Enable, or Disable once it is
+        enabled, and Uninstall.
+        """
+        while (item := self._plugin_rows.takeAt(0)) is not None:
+            if (widget := item.widget()) is not None:
+                widget.deleteLater()
+        self._plugin_buttons = {}
+        installed = {plugin.name: plugin for plugin in discover(self._plugin_directory)}
+        offered = self._catalog or {}
+        for name in sorted({*installed, *offered, *self._enabled}):
+            local, remote = installed.get(name), offered.get(name)
+            title = (local.title if local else "") or (remote.title if remote else "") or name
+            detail = (local.description if local else "") or (remote.description if remote else "")
+            enabled = name in self._enabled
+            actions: list[tuple[str, Callable[[str], None]]] = []
+            if local is None:
+                state = "Not installed"
+                if enabled:
+                    state = "Enabled, but not installed"
+                    actions.append(("Disable", lambda chosen: self._enable(chosen, False)))
+                if remote is not None:
+                    actions.append(("Install", self._install))
+            else:
+                state = "Enabled" if enabled else "Installed"
+                if enabled:
+                    actions.append(("Disable", lambda chosen: self._enable(chosen, False)))
+                else:
+                    actions.append(("Enable", lambda chosen: self._enable(chosen, True)))
+                # A plugin that came as a Python package is not ours to delete.
+                if not local.source.startswith("installed package"):
+                    actions.append(("Uninstall", self._uninstall))
+                if enabled and name in REGISTRY.errors:
+                    detail = f"Could not be loaded: {REGISTRY.errors[name]}"
+
+            heading = QLabel(f"<b>{title}</b> ({name}) \u2013 {state}")
+            about = QLabel(detail)
+            about.setObjectName("hint")
+            about.setWordWrap(True)
+            text = QVBoxLayout()
+            text.setSpacing(0)
+            text.addWidget(heading)
+            text.addWidget(about)
+            row = QWidget()
+            line = QHBoxLayout(row)
+            line.setContentsMargins(0, 0, 0, 8)
+            line.addLayout(text, 1)
+            self._plugin_buttons[name] = {}
+            for label, handler in actions:
+                button = QPushButton(label)
+                button.clicked.connect(lambda _=False, run=handler, chosen=name: run(chosen))
+                self._plugin_buttons[name][label] = button
+                line.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
+            self._plugin_rows.addWidget(row)
+        if not self._plugin_buttons:
+            empty = QLabel("No plugins installed.")
+            empty.setObjectName("hint")
+            self._plugin_rows.addWidget(empty)
+
+    def _page_shown(self, index: int) -> None:
+        if self._pages.widget(index) is self._plugins_page and not self._catalog_loaded:
+            self.load_catalog()
+
+    def load_catalog(self) -> None:
+        """Fetch the list of available plugins without holding up the window."""
+        if not self._catalog_refresh.isEnabled():
+            return
+        self._catalog_loaded = True
+        self._catalog_refresh.setEnabled(False)
+        self._catalog_status.setText(f"Looking at {catalog.REPOSITORY} \u2026")
+        self._fetch_catalog()
+
+    def _fetch_catalog(self) -> None:
+        """Download the plugin repository; `_show_catalog` gets the outcome."""
+        request = QNetworkRequest(QUrl(catalog.ARCHIVE_URL))
+        request.setTransferTimeout(20_000)
+        reply = self._network.get(request)
+
+        def fetched() -> None:
+            reply.deleteLater()
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                problem = reply.errorString()
+                self._show_catalog(
+                    None, f"Cannot download the plugins from {catalog.REPOSITORY}: {problem}"
+                )
+                return
+            try:
+                plugins = catalog.from_archive(bytes(reply.readAll().data()))
+            except catalog.CatalogError as error:
+                self._show_catalog(None, str(error))
+            else:
+                self._show_catalog(plugins, "")
+
+        reply.finished.connect(fetched)
+
+    def _show_catalog(self, plugins: dict[str, catalog.CatalogPlugin] | None, error: str) -> None:
+        """Take in what the plugin repository offers, or why it could not be read."""
+        self._catalog_refresh.setEnabled(True)
+        if plugins is None:
+            self._catalog_status.setText(error)
+            return
+        self._catalog = plugins
+        self._catalog_status.setText(
+            "" if plugins else f"There are no plugins at {catalog.REPOSITORY} yet."
+        )
+        self._fill_plugins()
+
+    def _install(self, name: str) -> None:
+        plugin = (self._catalog or {}).get(name)
+        if plugin is None:
+            return
+        try:
+            catalog.install(plugin, self._plugin_directory, replace=True)
+        except catalog.CatalogError as error:
+            self._catalog_status.setText(str(error))
+            return
+        self._fill_plugins()
+        self._catalog_status.setText(f"{plugin.title} is installed. Enable it to use it.")
+
+    def _enable(self, name: str, enabled: bool) -> None:
+        """Switch a plugin on or off right away, in the saved settings and the service.
+
+        Only the list of enabled plugins is written; everything else in this
+        window still waits for Apply.
+        """
+        try:
+            saved = load_config(self._path) if self._path.exists() else Config()
+            names = [plugin for plugin in saved.enabled_plugins if plugin != name]
+            if enabled:
+                names.append(name)
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._path.write_text(
+                dump_config(replace(saved, enabled_plugins=tuple(names))), encoding="utf-8"
+            )
+        except (ConfigError, OSError) as error:
+            self._catalog_status.setText(f"Cannot save the settings: {error}")
+            return
+        self._enabled = names
+        # A service that is not running picks the change up when it starts.
+        with contextlib.suppress(IpcError):
+            send_command("reload")
+        self._fill_plugins()
+        self._catalog_status.setText(f"{name} is {'enabled' if enabled else 'disabled'}.")
+
+    def _uninstall(self, name: str) -> None:
+        answer = QMessageBox.question(
+            self, "Ring", f"Delete the plugin '{name}' from your plugins folder?"
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        if name in self._enabled:
+            self._enable(name, False)
+            if name in self._enabled:
+                return
+        try:
+            catalog.remove(name, self._plugin_directory)
+        except OSError as error:
+            self._catalog_status.setText(f"Cannot delete '{name}': {error}")
+            return
+        self._fill_plugins()
+        self._catalog_status.setText(f"{name} is uninstalled.")
 
     def _about_tab(self) -> QWidget:
         self._count = QLabel()
@@ -1033,6 +1205,8 @@ class SettingsWindow(QWidget):
                 key=self._key.currentData(),
                 shortcut=shortcut,
                 cancel_key=self._config.trigger.cancel_key,
+                delay_ms=self._delay.value(),
+                double_tap=self._double_tap.isChecked(),
             ),
             radial=RadialConfig(
                 visible=config.radial.visible,
@@ -1058,9 +1232,7 @@ class SettingsWindow(QWidget):
             ),
             tray=TrayConfig(visible=self._tray.isChecked()),
             excluded_apps=apps,
-            enabled_plugins=tuple(
-                name for name, box in self._plugin_boxes.items() if box.isChecked()
-            ),
+            enabled_plugins=tuple(self._enabled),
         )
 
     def apply(self) -> None:
@@ -1184,7 +1356,7 @@ def run_settings(path: Path | None = None) -> int:
     """Show the settings window and run until it is closed."""
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Ring Settings")
-    app.setDesktopFileName("looplinux-settings")
+    app.setDesktopFileName("ring-settings")
     target = path or user_config_path()
     try:
         config = load_config(target) if target.exists() else Config()

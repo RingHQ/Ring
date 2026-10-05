@@ -1,6 +1,6 @@
 """Remember window geometries so actions can be undone and windows restored.
 
-The history is stored in XDG_RUNTIME_DIR, so separate `looplinux snap`
+The history is stored in XDG_RUNTIME_DIR, so separate `ring snap`
 invocations share it and it disappears at logout together with the window ids
 it refers to.
 """
@@ -11,8 +11,8 @@ import os
 import tempfile
 from pathlib import Path
 
-from looplinux.actions import Rect
-from looplinux.backends.base import StashEntry
+from ring.actions import Rect
+from ring.backends.base import StashEntry
 
 _MAX_WINDOWS = 64
 _MAX_UNDO_STEPS = 16
@@ -20,13 +20,13 @@ _MAX_UNDO_STEPS = 16
 
 def default_history_path() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
-    return Path(base) / "looplinux" / "history.json"
+    return Path(base) / "ring" / "history.json"
 
 
 class History:
     """Per-window geometry history.
 
-    For each window it keeps the geometry from before looplinux first touched
+    For each window it keeps the geometry from before Ring first touched
     it (for `initial_frame`), the most recent geometries (for `undo`) and the
     action it is currently snapped to (so cycles know where to continue).
     """

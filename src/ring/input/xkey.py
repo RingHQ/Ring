@@ -13,7 +13,7 @@ import struct
 from collections.abc import Callable
 from typing import Any
 
-from looplinux.input.keys import EVDEV_CODES
+from ring.input.keys import EVDEV_CODES
 
 # XInput2 event types.
 _RAW_KEY_PRESS = 13
@@ -45,12 +45,21 @@ class KeyListener:
     """
 
     def __init__(
-        self, key: str, on_press: Callable[[], None], on_release: Callable[[], None]
+        self,
+        key: str,
+        on_press: Callable[[], None],
+        on_release: Callable[[], None],
+        on_other: Callable[[], None] | None = None,
     ) -> None:
-        """Watch `key`, an evdev key name such as KEY_RIGHTCTRL."""
+        """Watch `key`, an evdev key name such as KEY_RIGHTCTRL.
+
+        `on_other` is called when another key goes down while `key` is held,
+        as far as the compositor lets X clients see that.
+        """
         self.keycode = x_keycode(key)
         self._on_press = on_press
         self._on_release = on_release
+        self._on_other = on_other
         self._down = False
         try:
             from Xlib import display
@@ -79,27 +88,35 @@ class KeyListener:
     def dispatch(self) -> bool:
         """Handle every pending event; return False once the X server is gone."""
         try:
-            while self._display.pending_events():
-                event = self._display.next_event()
-                if event.type != self._generic_event or event.extension != self._opcode:
-                    continue
-                if event.evtype not in (_RAW_KEY_PRESS, _RAW_KEY_RELEASE):
-                    continue
-                # Raw event body: device id (2 bytes), time (4), key code (4), ...
-                _, _, keycode = struct.unpack_from("=HII", event.data)
-                if keycode != self.keycode:
-                    continue
-                down = event.evtype == _RAW_KEY_PRESS
-                if down == self._down:
-                    continue  # key repeat
-                self._down = down
-                if down:
-                    self._on_press()
-                else:
-                    self._on_release()
+            callbacks = self._read()
         except Exception:
             return False
+        # Outside the try: an error in a callback is not a lost X server.
+        for callback in callbacks:
+            callback()
         return True
+
+    def _read(self) -> list[Callable[[], None]]:
+        """Turn the pending X events into the callbacks they call for."""
+        callbacks: list[Callable[[], None]] = []
+        while self._display.pending_events():
+            event = self._display.next_event()
+            if event.type != self._generic_event or event.extension != self._opcode:
+                continue
+            if event.evtype not in (_RAW_KEY_PRESS, _RAW_KEY_RELEASE):
+                continue
+            # Raw event body: device id (2 bytes), time (4), key code (4), ...
+            _, _, keycode = struct.unpack_from("=HII", event.data)
+            down = event.evtype == _RAW_KEY_PRESS
+            if keycode != self.keycode:
+                if down and self._down and self._on_other is not None:
+                    callbacks.append(self._on_other)
+                continue
+            if down == self._down:
+                continue  # key repeat
+            self._down = down
+            callbacks.append(self._on_press if down else self._on_release)
+        return callbacks
 
     def close(self) -> None:
         self._display.close()

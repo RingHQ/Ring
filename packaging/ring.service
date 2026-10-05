@@ -1,10 +1,11 @@
 [Unit]
 Description=Ring radial window snapper
+Documentation=https://github.com/RingHQ/Ring
 PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
-ExecStart=/usr/bin/looplinux run
+ExecStart=/usr/bin/ring run
 Restart=on-failure
 RestartSec=2
 

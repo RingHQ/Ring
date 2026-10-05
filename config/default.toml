@@ -1,6 +1,6 @@
-# loop-linux default configuration. The defaults follow Loop for macOS.
+# Ring default configuration. The defaults follow Loop for macOS.
 #
-# Copy this file to ~/.config/looplinux/config.toml and keep only the keys you
+# Copy this file to ~/.config/ring/config.toml and keep only the keys you
 # want to change; everything you leave out falls back to the values below.
 #
 # Actions
@@ -43,6 +43,12 @@ key = "KEY_RIGHTCTRL"
 shortcut = "Meta+X"
 # Key that closes the menu without doing anything (evdev key name).
 cancel_key = "KEY_ESC"
+# Milliseconds the trigger has to be held before the menu opens (0 to 2000).
+# With a delay, a trigger key such as Right Ctrl stays usable for ordinary
+# shortcuts: a quick Ctrl+C is over, or interrupted by the C, before it ends.
+delay_ms = 0
+# true: the menu opens on the second of two quick presses; hold the second.
+double_tap = false
 
 [radial]
 visible = true    # false: no ring, only the preview
@@ -154,11 +160,11 @@ start = "action_center"     # where it grows from: action_center, radial_menu, s
 visible = true
 
 [exclusions]
-# Window classes / app ids that loop-linux never touches (case-insensitive).
+# Window classes / app ids that Ring never touches (case-insensitive).
 apps = []
 
 # Plugins add actions and react to what Ring does. They are Python files in
-# ~/.config/looplinux/plugins/ and run with your full permissions, so only
+# ~/.config/ring/plugins/ and run with your full permissions, so only
 # the ones named here are loaded. Their actions are called "<plugin>.<action>".
 [plugins]
 enabled = []

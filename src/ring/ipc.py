@@ -1,4 +1,4 @@
-"""Unix-socket control channel between `looplinux trigger` and the daemon.
+"""Unix-socket control channel between `ring trigger` and the daemon.
 
 The protocol is one command per connection: the client sends a single line
 and the daemon answers with a single line.
@@ -20,7 +20,7 @@ class IpcError(RuntimeError):
 
 def socket_path() -> Path:
     base = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
-    return Path(base) / "looplinux" / "socket"
+    return Path(base) / "ring" / "socket"
 
 
 def send_command(command: str, timeout: float = 2.0) -> str:
@@ -34,8 +34,7 @@ def send_command(command: str, timeout: float = 2.0) -> str:
             return client.makefile("r", encoding="utf-8").readline().strip()
     except OSError as error:
         raise IpcError(
-            "looplinux is not running. Start it with `looplinux run` or "
-            "`systemctl --user start looplinux`."
+            "Ring is not running. Start it with `ring run` or `systemctl --user start ring`."
         ) from error
 
 

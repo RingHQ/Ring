@@ -15,10 +15,10 @@ from jeepney.io.blocking import open_dbus_connection
 
 _SERVICE = "org.kde.kglobalaccel"
 _DAEMON = DBusAddress("/kglobalaccel", bus_name=_SERVICE, interface="org.kde.KGlobalAccel")
-_COMPONENT = "looplinux"
+_COMPONENT = "ring"
 _COMPONENT_PATH = f"/component/{_COMPONENT}"
 _COMPONENT_INTERFACE = "org.kde.kglobalaccel.Component"
-_ACTION_ID = [_COMPONENT, "trigger", "loop-linux", "Hold to show the radial menu"]
+_ACTION_ID = [_COMPONENT, "trigger", "Ring", "Hold to show the radial menu"]
 
 # KGlobalAccel flags: mark the shortcut active and take the keys from us
 # instead of from whatever was stored for this action earlier.

@@ -54,7 +54,7 @@ Window {
     color: "transparent"
     flags: Qt.FramelessWindowHint
 
-    LayerShell.Window.scope: "looplinux"
+    LayerShell.Window.scope: "ring"
     LayerShell.Window.layer: LayerShell.Window.LayerOverlay
     LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom
         | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight

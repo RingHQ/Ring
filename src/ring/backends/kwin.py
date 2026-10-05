@@ -3,13 +3,12 @@
 KWin has no D-Bus API to move arbitrary windows, but it can load and run a
 JavaScript snippet with full access to its window list. Each request below is
 such a snippet; it reports its result by calling back to this process over
-D-Bus. The same mechanism works in Wayland and X11 Plasma sessions.
+D-Bus.
 
 Requires Plasma 6.
 """
 
 import json
-import math
 import os
 import secrets
 import tempfile
@@ -30,21 +29,22 @@ from jeepney import (
 )
 from jeepney.io.blocking import DBusConnection, open_dbus_connection
 
-from looplinux.actions import Rect
-from looplinux.backends.base import (
+from ring.actions import Rect
+from ring.backends.base import (
     BackendError,
     Monitor,
+    Scene,
     StashEntry,
     Window,
     WindowBackend,
 )
 
 _SCRIPTING = DBusAddress("/Scripting", bus_name="org.kde.KWin", interface="org.kde.kwin.Scripting")
-_CALLBACK_INTERFACE = "io.github.looplinux.KWinCallback"
+_CALLBACK_INTERFACE = "io.github.ringhq.Ring.KWinCallback"
 _CALLBACK_MEMBER = "reply"
 _TIMEOUT = 3.0
-_STASH_PLUGIN = "looplinux-stash"
-# How long past its nominal end an animation script is kept loaded.
+_STASH_PLUGIN = "ring-stash"
+# How long past its nominal end an animation script may still be running.
 _ANIMATION_SLACK = 0.15
 
 # Helpers available to every request body. `args` holds the request arguments.
@@ -94,8 +94,9 @@ function bezier(x1, y1, x2, y2) {
     };
 }
 var moving = {};
-// Give a window a new frame, gliding there if an animation is given.
-function moveTo(w, target, animation) {
+// Give a window a new frame, gliding there if an animation is given. `done`
+// is called once a glide has ended, however it ended.
+function moveTo(w, target, animation, done) {
     var id = String(w.internalId);
     if (moving[id]) {
         moving[id].stop();
@@ -110,18 +111,23 @@ function moveTo(w, target, animation) {
     var ease = bezier(c[0], c[1], c[2], c[3]);
     var started = Date.now();
     var timer = new QTimer();
+    function finish() {
+        timer.stop();
+        delete moving[id];
+        if (done) {
+            done();
+        }
+    }
     timer.interval = 8;
     timer.timeout.connect(function () {
         if (w.deleted) {
-            timer.stop();
-            delete moving[id];
+            finish();
             return;
         }
         var t = Math.min((Date.now() - started) / animation.duration_ms, 1);
         if (t >= 1) {
-            timer.stop();
-            delete moving[id];
             w.frameGeometry = target;
+            finish();
             return;
         }
         var k = ease(t);
@@ -219,13 +225,45 @@ _CURSOR = """
 return {x: Math.round(workspace.cursorPos.x), y: Math.round(workspace.cursorPos.y)};
 """
 
+# Everything the menu needs to open, in one round trip.
+_SCENE = """
+var w = workspace.activeWindow;
+var p = {x: Math.round(workspace.cursorPos.x), y: Math.round(workspace.cursorPos.y)};
+var screens = workspace.screens;
+var under = screens[0];
+for (var i = 0; i < screens.length; i++) {
+    var g = screens[i].geometry;
+    if (p.x >= g.x && p.x < g.x + g.width && p.y >= g.y && p.y < g.y + g.height) {
+        under = screens[i];
+        break;
+    }
+}
+if (!under) {
+    throw new Error("no monitors found");
+}
+return {
+    // Our own overlay is a focused layer-shell surface while the menu is open.
+    window: !w || w.specialWindow || w.deleted || w.pid === args.pid ? null : describe(w),
+    cursor: p,
+    monitors: screens.map(function (screen) {
+        return {name: String(screen.name), geometry: rect(screen.geometry)};
+    }),
+    monitor: String(under.name),
+    area: rect(workspace.clientArea(KWin.MaximizeArea, under, workspace.currentDesktop)),
+};
+"""
+
+# With an animation the script stays loaded while the window glides, and
+# unloads itself from inside KWin when it is done.
 _SET_GEOMETRY = """
 var w = find(args.id);
 if (w.fullScreen) {
     w.fullScreen = false;
 }
 w.setMaximize(false, false);
-moveTo(w, args.target, args.animation);
+moveTo(w, args.target, args.animation, function () {
+    callDBus("org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting", "unloadScript", args.plugin);
+});
 return null;
 """
 
@@ -318,10 +356,12 @@ function check() {
     }
 }
 
+var missing = [];
 for (var i = 0; i < entries.length; i++) {
     var entry = entries[i];
     var w = lookup(entry.window_id);
     if (!w) {
+        missing.push(entry.window_id);
         continue;
     }
     if (args.hide.indexOf(entry.window_id) >= 0) {
@@ -375,7 +415,7 @@ workspace.windowActivated.connect(function (w) {
         reveal(entries[i], w);
     }
 });
-return entries.length;
+return missing;
 """
 
 _SET_FULLSCREEN = """
@@ -412,18 +452,16 @@ class KWinBackend(WindowBackend):
         except Exception as error:
             raise BackendError(
                 f"Cannot connect to the session D-Bus ({error}). "
-                "Run looplinux from inside your Plasma session."
+                "Run Ring from inside your Plasma session."
             ) from error
-        # Animation scripts still running inside KWin: (plugin name, time it ends).
-        self._animating: list[tuple[str, float]] = []
+        # Windows still gliding: window id -> (plugin name of the script, time it ends).
+        self._animating: dict[str, tuple[str, float]] = {}
         runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
         self._script_dir = Path(runtime_dir)
 
     def close(self) -> None:
-        try:
-            self._settle()
-        finally:
-            self._connection.close()
+        # Animations still running finish and unload themselves inside KWin.
+        self._connection.close()
 
     def get_active_window(self) -> Window | None:
         data = self._run(_ACTIVE_WINDOW, pid=os.getpid())
@@ -442,31 +480,55 @@ class KWinBackend(WindowBackend):
         data = self._run(_CURSOR)
         return int(data["x"]), int(data["y"])
 
-    def set_geometry(self, window: Window, rect: Rect) -> None:
-        animation = self.animation
-        self._run(
-            _SET_GEOMETRY,
-            keep_for=None if animation is None else animation.duration_ms / 1000,
-            id=window.id,
-            target=asdict(rect),
-            animation=None if animation is None else asdict(animation),
+    def get_scene(self) -> Scene:
+        data = self._run(_SCENE, pid=os.getpid())
+        monitors = [Monitor(item["name"], _to_rect(item["geometry"])) for item in data["monitors"]]
+        return Scene(
+            window=None if data["window"] is None else _to_window(data["window"]),
+            cursor=(int(data["cursor"]["x"]), int(data["cursor"]["y"])),
+            monitors=monitors,
+            monitor=next(monitor for monitor in monitors if monitor.name == data["monitor"]),
+            area=_to_rect(data["area"]),
         )
 
-    def watch_stash(self, entries: Sequence[StashEntry], hide: Sequence[str] = ()) -> None:
-        self._settle()
+    def set_geometry(self, window: Window, rect: Rect) -> None:
+        animation = self.animation
+        # A glide still under way is cut short; the new one continues from
+        # wherever the window has got to.
+        self._stop_animation(window.id)
+        if animation is None:
+            self._run(_SET_GEOMETRY, id=window.id, target=asdict(rect), animation=None)
+            return
+        plugin = f"ring-{secrets.token_hex(8)}"
+        self._run(
+            _SET_GEOMETRY,
+            plugin=plugin,
+            keep=True,
+            id=window.id,
+            target=asdict(rect),
+            animation=asdict(animation),
+        )
+        ends = time.monotonic() + animation.duration_ms / 1000 + _ANIMATION_SLACK
+        self._animating[window.id] = (plugin, ends)
+
+    def watch_stash(self, entries: Sequence[StashEntry], hide: Sequence[str] = ()) -> Sequence[str]:
         self._call(_SCRIPTING, "unloadScript", "s", _STASH_PLUGIN)
         if not entries:
-            return
+            return ()
+        # The watcher moves these itself.
+        for window_id in hide:
+            self._stop_animation(window_id)
         animation = self.stash_animation
-        self._run(
+        missing = self._run(
             _STASH_WATCHER,
             plugin=_STASH_PLUGIN,
-            keep_for=math.inf,
+            keep=True,
             entries=[asdict(entry) for entry in entries],
             hide=list(hide),
             focus=self.stash_shift_focus,
             animation=None if animation is None else asdict(animation),
         )
+        return [str(window_id) for window_id in missing]
 
     def set_fullscreen(self, window: Window, fullscreen: bool) -> None:
         self._run(_SET_FULLSCREEN, id=window.id, fullscreen=fullscreen)
@@ -489,44 +551,46 @@ class KWinBackend(WindowBackend):
             raise BackendError(f"KWin rejected the D-Bus call {method}: {detail}")
         return reply.body[0] if reply.body else None
 
-    def _settle(self) -> None:
-        """Wait for running window animations to end and unload their scripts."""
-        animating, self._animating = self._animating, []
-        for plugin, ends in animating:
-            time.sleep(max(ends - time.monotonic(), 0))
+    def _stop_animation(self, window_id: str) -> None:
+        """Unload the script that is still gliding a window, if there is one."""
+        now = time.monotonic()
+        plugin, ends = self._animating.pop(window_id, ("", 0.0))
+        if ends > now:
             self._call(_SCRIPTING, "unloadScript", "s", plugin)
+        # Glides that ran to their end have unloaded themselves.
+        self._animating = {key: value for key, value in self._animating.items() if value[1] > now}
 
     def _run(
         self,
         body: str,
         *,
         plugin: str | None = None,
-        keep_for: float | None = None,
+        keep: bool = False,
         **args: object,
     ) -> Any:
         """Run a script body inside KWin and return the value it returns.
 
-        The script is unloaded as soon as it has answered, unless `keep_for`
-        says it has timers or signal handlers that must live on for that many
-        seconds (`math.inf`: until someone unloads `plugin` by name).
+        The script is unloaded as soon as it has answered, unless `keep` says
+        it has timers or signal handlers that must live on; it then stays
+        until it unloads itself or someone unloads `plugin` by name. The
+        script finds its own plugin name in `args.plugin`.
         """
-        self._settle()
         token = secrets.token_hex(8)
         # Unique across processes and backends: KWin refuses a name twice.
-        plugin = plugin or f"looplinux-{token}"
-        unload = keep_for is None
+        plugin = plugin or f"ring-{token}"
+        unload = not keep
         source = _WRAPPER.format(
             service=json.dumps(self._connection.unique_name),
             interface=json.dumps(_CALLBACK_INTERFACE),
             member=json.dumps(_CALLBACK_MEMBER),
             token=json.dumps(token),
-            args=json.dumps(args),
+            args=json.dumps({**args, "plugin": plugin}),
             prelude=_PRELUDE,
             body=body,
         )
         rule = MatchRule(type="method_call", interface=_CALLBACK_INTERFACE, member=_CALLBACK_MEMBER)
         with tempfile.NamedTemporaryFile(
-            "w", dir=self._script_dir, prefix="looplinux-", suffix=".js", encoding="utf-8"
+            "w", dir=self._script_dir, prefix="ring-", suffix=".js", encoding="utf-8"
         ) as file:
             file.write(source)
             file.flush()
@@ -534,7 +598,7 @@ class KWinBackend(WindowBackend):
             with self._connection.filter(rule, queue=deque()) as replies:
                 script_id = self._call(_SCRIPTING, "loadScript", "ss", file.name, plugin)
                 if not isinstance(script_id, int) or script_id < 0:
-                    raise BackendError("KWin refused to load the looplinux helper script")
+                    raise BackendError("KWin refused to load the Ring helper script")
                 try:
                     script = DBusAddress(
                         f"/Scripting/Script{script_id}",
@@ -550,9 +614,6 @@ class KWinBackend(WindowBackend):
                 finally:
                     if unload:
                         self._call(_SCRIPTING, "unloadScript", "s", plugin)
-                    elif keep_for is not None and keep_for != math.inf:
-                        ends = time.monotonic() + keep_for + _ANIMATION_SLACK
-                        self._animating.append((plugin, ends))
         if not payload.get("ok"):
             raise BackendError(f"KWin could not complete the request: {payload.get('error')}")
         return payload.get("value")
@@ -563,7 +624,7 @@ class KWinBackend(WindowBackend):
                 message = self._connection.recv_until_filtered(replies, timeout=_TIMEOUT)
             except TimeoutError:
                 raise BackendError(
-                    "KWin ran the looplinux helper script but never reported back. "
+                    "KWin ran the Ring helper script but never reported back. "
                     "Check `journalctl --user -b -g kwin` for script errors."
                 ) from None
             self._connection.send(new_method_return(message))

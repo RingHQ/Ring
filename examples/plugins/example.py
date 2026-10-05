@@ -1,15 +1,15 @@
 """Example plugin: a "small and centered" action and a log of what Ring does.
 
-To try it, copy this file to ~/.config/looplinux/plugins/, enable "example"
+To try it, copy this file to ~/.config/ring/plugins/, enable "example"
 in the settings window (Plugins), and put the action "example.small" on a key
 or a direction.
 """
 
 import logging
 
-from looplinux.actions import Rect
+from ring.actions import Rect
 
-log = logging.getLogger("looplinux.example")
+log = logging.getLogger("ring.example")
 
 
 def small(context):

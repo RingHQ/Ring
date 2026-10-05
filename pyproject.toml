@@ -3,15 +3,15 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "looplinux"
+name = "ring"
 version = "0.1.0"
 description = "Ring: a radial window snapper for Linux, ported from Loop for macOS"
 readme = "README.md"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"
-keywords = ["window-manager", "tiling", "snapping", "x11", "wayland"]
+keywords = ["window-manager", "tiling", "snapping", "wayland", "kde"]
 classifiers = [
-    "Environment :: X11 Applications :: Qt",
+    "Environment :: X11 Applications :: KDE",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
     "Topic :: Desktop Environment :: Window Managers",
@@ -25,8 +25,12 @@ dependencies = [
     "python-xlib>=0.33",
 ]
 
+[project.urls]
+Repository = "https://github.com/RingHQ/Ring"
+Issues = "https://github.com/RingHQ/Ring/issues"
+
 [project.scripts]
-looplinux = "looplinux.__main__:main"
+ring = "ring.__main__:main"
 
 [project.optional-dependencies]
 dev = [
@@ -36,10 +40,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/looplinux"]
-
-[tool.pytest.ini_options]
-pythonpath = ["src"]
+packages = ["src/ring"]
 
 [tool.ruff]
 line-length = 100
@@ -61,6 +62,6 @@ ignore_missing_imports = true
 
 # Distribution builds of PySide6 ship without type stubs.
 [[tool.mypy.overrides]]
-module = ["looplinux.app", "looplinux.overlay.radial", "looplinux.settings", "looplinux.tray"]
+module = ["ring.app", "ring.overlay.radial", "ring.settings", "ring.tray"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false

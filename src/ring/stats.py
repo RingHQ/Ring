@@ -9,7 +9,7 @@ from pathlib import Path
 
 def default_stats_path() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return Path(base) / "looplinux" / "stats.json"
+    return Path(base) / "ring" / "stats.json"
 
 
 class Stats:

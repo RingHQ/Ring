@@ -14,7 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from looplinux.actions import (
+from ring.actions import (
     Action,
     ActionSpec,
     CustomAction,
@@ -42,6 +42,7 @@ ANIMATIONS: dict[str, tuple[tuple[float, float, float, float], int, int]] = {
 }
 ANIMATION_STYLES = tuple(ANIMATIONS)
 PREVIEW_STARTS = ("action_center", "radial_menu", "screen_center")
+MAX_TRIGGER_DELAY_MS = 2000
 
 type Chord = frozenset[str]
 """Keys held together, as evdev key names."""
@@ -57,6 +58,10 @@ class TriggerConfig:
     key: str = "KEY_RIGHTCTRL"
     shortcut: str = "Meta+X"
     cancel_key: str = "KEY_ESC"
+    # Milliseconds the trigger must be held before the menu opens.
+    delay_ms: int = 0
+    # Open only on the second of two quick presses.
+    double_tap: bool = False
 
 
 _TOP_CYCLE = CycleAction((Action.TOP_HALF, Action.TOP_THIRD, Action.TOP_TWO_THIRDS))
@@ -451,8 +456,12 @@ def parse_config(data: Mapping[str, object]) -> Config:
         key=_key_name(trigger_table, "key", defaults.trigger.key),
         shortcut=trigger_table.string("shortcut", defaults.trigger.shortcut),
         cancel_key=_key_name(trigger_table, "cancel_key", defaults.trigger.cancel_key),
+        delay_ms=trigger_table.integer("delay_ms", defaults.trigger.delay_ms),
+        double_tap=trigger_table.boolean("double_tap", defaults.trigger.double_tap),
     )
     trigger_table.finish()
+    if trigger.delay_ms > MAX_TRIGGER_DELAY_MS:
+        raise ConfigError(f"trigger.delay_ms: must be at most {MAX_TRIGGER_DELAY_MS}")
     if not trigger.shortcut.strip():
         raise ConfigError("trigger.shortcut: must not be empty")
     if trigger.key == trigger.cancel_key:
@@ -584,7 +593,7 @@ def parse_config(data: Mapping[str, object]) -> Config:
 def user_config_path() -> Path:
     """Return the per-user config location, honouring XDG_CONFIG_HOME."""
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
-    return Path(base) / "looplinux" / "config.toml"
+    return Path(base) / "ring" / "config.toml"
 
 
 def load_config(path: Path | None = None) -> Config:

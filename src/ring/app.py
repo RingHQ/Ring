@@ -14,13 +14,16 @@ import math
 import os
 import signal
 import socket
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QObject, QSocketNotifier, QTimer
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QGuiApplication, QKeySequence
 from PySide6.QtWidgets import QApplication
 
-from looplinux.actions import (
+from ring.actions import (
+    SCREEN_ACTIONS,
     Action,
     ActionSpec,
     CycleAction,
@@ -35,28 +38,29 @@ from looplinux.actions import (
     radial_angle,
     sector_angle,
 )
-from looplinux.backends import BackendError, Monitor, Window, WindowBackend, create_backend
-from looplinux.config import Config
-from looplinux.executor import (
+from ring.backends import BackendError, Monitor, Window, WindowBackend, create_backend
+from ring.config import Config
+from ring.executor import (
     ActionError,
     apply_frame,
     compute_target,
     configure_backend,
-    monitor_at,
     perform,
     recorded_action,
+    screen_target,
+    watch_stash,
 )
-from looplinux.history import History, default_history_path
-from looplinux.input.keys import evdev_name
-from looplinux.input.shortcut import GlobalShortcut, ShortcutError
-from looplinux.input.xkey import KeyListener, KeyListenerError
-from looplinux.ipc import IpcError, IpcServer, send_command
-from looplinux.overlay import Highlight, Overlay, OverlayError
-from looplinux.plugins import REGISTRY
-from looplinux.stats import Stats, default_stats_path
-from looplinux.tray import Tray
+from ring.history import History, default_history_path
+from ring.input.keys import evdev_name
+from ring.input.shortcut import GlobalShortcut, ShortcutError
+from ring.input.xkey import KeyListener, KeyListenerError
+from ring.ipc import IpcError, IpcServer, send_command
+from ring.overlay import Highlight, Overlay, OverlayError
+from ring.plugins import REGISTRY
+from ring.stats import Stats, default_stats_path
+from ring.tray import Tray
 
-log = logging.getLogger("looplinux")
+log = logging.getLogger("ring")
 
 # Pointer travel needed before the mouse takes over from a key selection.
 _KEY_SELECTION_SLACK = 12
@@ -77,9 +81,15 @@ class _Session:
     """State of one trigger hold."""
 
     window: Window
+    # Where the menu is: the monitor under the cursor and its work area.
     monitor: Monitor
     area: Rect
+    monitors: list[Monitor]
     center: tuple[int, int]
+    # Where the selected action puts the window; another monitor for the
+    # screen actions.
+    target_monitor: Monitor
+    target_area: Rect
     # The action the window is snapped to already; cycles continue after it.
     recorded: Leaf | None
     # Where incremental actions (larger, grow, move, ...) continue from.
@@ -107,12 +117,14 @@ class Controller(QObject):
         trigger_key: int,
         trigger_scan_code: int = -1,
         stats: Stats | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Create the controller.
 
         `trigger_key` is the Qt key of the trigger and `trigger_scan_code`
         its X keycode; either may be -1 if unknown. They let the overlay
         recognise the trigger being released while it has the keyboard.
+        `clock` tells the time in seconds, for recognising a double tap.
         """
         super().__init__()
         self._config = config
@@ -129,6 +141,13 @@ class Controller(QObject):
         self._watchdog.setSingleShot(True)
         self._watchdog.setInterval(_WATCHDOG_MS)
         self._watchdog.timeout.connect(self.cancel)
+        self._clock = clock
+        # When the trigger last went down, while that can still become a double tap.
+        self._last_down: float | None = None
+        # Runs while the trigger is held but trigger.delay_ms has not passed.
+        self._delay = QTimer(self)
+        self._delay.setSingleShot(True)
+        self._delay.timeout.connect(self.press)
         overlay.pointer_moved.connect(self._on_pointer)
         overlay.key_pressed.connect(self._on_key_pressed)
         overlay.key_released.connect(self._on_key_released)
@@ -138,33 +157,64 @@ class Controller(QObject):
     def active(self) -> bool:
         return self._session is not None
 
+    def trigger_down(self) -> None:
+        """The trigger key went down: open the menu as the trigger options say.
+
+        With `trigger.double_tap` only the second of two quick presses
+        counts; with `trigger.delay_ms` the key has to stay down that long.
+        """
+        trigger = self._config.trigger
+        if trigger.double_tap:
+            now = self._clock()
+            previous, self._last_down = self._last_down, now
+            interval = QGuiApplication.styleHints().mouseDoubleClickInterval() / 1000
+            if previous is None or now - previous > interval:
+                return
+            # A third tap starts over.
+            self._last_down = None
+        if trigger.delay_ms > 0:
+            self._delay.start(trigger.delay_ms)
+        else:
+            self.press()
+
+    def trigger_up(self) -> None:
+        """The trigger key came back up."""
+        self._delay.stop()
+        self.release()
+
+    def trigger_interrupted(self) -> None:
+        """Another key went down with the trigger: it is being used as a modifier."""
+        self._delay.stop()
+        self._last_down = None
+
     def press(self) -> None:
-        """The trigger went down: show the menu for the active window."""
+        """Show the menu for the active window."""
         if self._session is not None or self.paused:
             return
         try:
             # Must come first: the overlay takes keyboard focus once shown.
-            window = self._backend.get_active_window()
-            if window is None:
-                log.info("trigger ignored: no active window")
-                return
-            if self._config.is_excluded(window.app_id):
-                log.info("trigger ignored: %s is excluded", window.app_id)
-                return
-            cursor = self._backend.get_cursor_position()
-            monitor = monitor_at(*cursor, self._backend.get_monitors())
-            area = self._backend.get_work_area(monitor)
-        except (BackendError, ActionError) as error:
+            scene = self._backend.get_scene()
+        except BackendError as error:
             log.error("cannot open the menu: %s", error)
+            return
+        window, monitor = scene.window, scene.monitor
+        if window is None:
+            log.info("trigger ignored: no active window")
+            return
+        if self._config.is_excluded(window.app_id):
+            log.info("trigger ignored: %s is excluded", window.app_id)
             return
 
         origin = monitor.geometry
-        center = (cursor[0] - origin.x, cursor[1] - origin.y)
+        center = (scene.cursor[0] - origin.x, scene.cursor[1] - origin.y)
         self._session = _Session(
             window=window,
             monitor=monitor,
-            area=area,
+            area=scene.area,
+            monitors=scene.monitors,
             center=center,
+            target_monitor=monitor,
+            target_area=scene.area,
             recorded=recorded_action(self._config, self._history, window),
             frame=window.geometry,
         )
@@ -173,7 +223,7 @@ class Controller(QObject):
         REGISTRY.emit("menu_opened", window=window)
 
     def release(self) -> None:
-        """The trigger went up: apply the selected action."""
+        """Close the menu and apply the selected action."""
         session = self._close()
         if session is None:
             return
@@ -190,8 +240,8 @@ class Controller(QObject):
                     self._config,
                     self._history,
                     session.window,
-                    session.monitor,
-                    session.area,
+                    session.target_monitor,
+                    session.target_area,
                 )
             else:
                 rect = perform(
@@ -269,32 +319,42 @@ class Controller(QObject):
             return
 
         target: Rect | None = None
+        monitor, area = session.monitor, session.area
         if leaf is not Action.NONE:
             try:
-                target = compute_target(
-                    leaf,
-                    self._backend,
-                    self._config,
-                    session.window,
-                    session.monitor,
-                    session.area,
-                    session.frame,
-                )
+                if leaf in SCREEN_ACTIONS:
+                    assert isinstance(leaf, Action)
+                    monitor, area, target = screen_target(
+                        leaf, self._backend, session.window, session.monitors
+                    )
+                else:
+                    target = compute_target(
+                        leaf,
+                        self._backend,
+                        self._config,
+                        session.window,
+                        session.monitor,
+                        session.area,
+                        session.frame,
+                    )
             except BackendError as error:
                 log.warning("%s: %s", action_name(leaf), error)
+            except ActionError:
+                # No such monitor: nothing to preview, and release() says why.
+                pass
         session.spec, session.leaf, session.direction = spec, leaf, direction
-        session.target = target
-        if target is not None:
+        session.target, session.target_monitor, session.target_area = target, monitor, area
+        if target is not None and monitor == session.monitor:
             session.frame = target
         self._show(session)
 
     def _show(self, session: _Session) -> None:
-        origin = session.monitor.geometry
+        origin = session.target_monitor.geometry
         target = session.target
         local = None
         if target is not None:
             local = Rect(target.x - origin.x, target.y - origin.y, target.width, target.height)
-        self._overlay.select(*self._highlight(session), local)
+        self._overlay.select(*self._highlight(session), local, session.target_monitor)
 
     def _highlight(self, session: _Session) -> tuple[Highlight, float]:
         """Decide how the ring shows the selection.
@@ -404,20 +464,19 @@ def run(config: Config, backend_name: str | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     if os.environ.get("XDG_SESSION_TYPE", "").lower() != "wayland":
         raise StartupError(
-            "The radial menu currently needs a Wayland session (it is drawn as a "
-            "layer-shell surface). `looplinux snap` works without it."
+            "Ring needs a Wayland session: the radial menu is drawn as a layer-shell surface."
         )
     try:
         send_command("ping", timeout=0.5)
     except IpcError:
         pass
     else:
-        raise StartupError("looplinux is already running.")
+        raise StartupError("Ring is already running.")
 
     os.environ["QT_QPA_PLATFORM"] = "wayland"
     os.environ["QT_WAYLAND_SHELL_INTEGRATION"] = "layer-shell"
     # A full QApplication, not just a GUI one: the tray icon needs it.
-    app = QApplication(["looplinux"])
+    app = QApplication(["ring"])
     app.setQuitOnLastWindowClosed(False)
 
     backend = create_backend(backend_name)
@@ -427,11 +486,12 @@ def run(config: Config, backend_name: str | None = None) -> int:
             overlay = Overlay(config)
         except OverlayError as error:
             raise StartupError(str(error)) from error
+        REGISTRY.painter = overlay.set_colors
         history = History(default_history_path())
         configure_backend(backend, config)
         try:
             # Pick the stashed windows up again after a restart.
-            backend.watch_stash(history.stashed())
+            watch_stash(backend, history)
         except BackendError as error:
             log.warning("cannot watch stashed windows: %s", error)
 
@@ -444,7 +504,10 @@ def run(config: Config, backend_name: str | None = None) -> int:
         if config.trigger.use == "key":
             try:
                 trigger = KeyListener(
-                    held, lambda: controllers[0].press(), lambda: controllers[0].release()
+                    held,
+                    lambda: controllers[0].trigger_down(),
+                    lambda: controllers[0].trigger_up(),
+                    lambda: controllers[0].trigger_interrupted(),
                 )
                 controllers.append(
                     Controller(config, backend, overlay, history, -1, trigger.keycode, stats)
@@ -459,7 +522,7 @@ def run(config: Config, backend_name: str | None = None) -> int:
             )
             try:
                 trigger = GlobalShortcut(
-                    combined, held, controllers[0].press, controllers[0].release
+                    combined, held, controllers[0].trigger_down, controllers[0].trigger_up
                 )
             except ShortcutError as error:
                 raise StartupError(str(error)) from error
