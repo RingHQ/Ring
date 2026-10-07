@@ -73,7 +73,15 @@ class KeyListener:
                 raise KeyListenerError("the X server has no XInput extension")
             self._opcode = extension.major_opcode
             self._generic_event = self._display.extension_event.GenericEvent
-            self._display.xinput_query_version()
+            # Version 2.1, not the 2.0 python-xlib would ask for: only from
+            # 2.1 on do raw events keep coming while another client has
+            # grabbed the keyboard, as the X11 overlay does.
+            xinput.XIQueryVersion(
+                display=self._display.display,
+                opcode=self._opcode,
+                major_version=2,
+                minor_version=1,
+            )
             mask = xinput.RawKeyPressMask | xinput.RawKeyReleaseMask
             self._display.screen().root.xinput_select_events([(xinput.AllMasterDevices, mask)])
             self._display.sync()

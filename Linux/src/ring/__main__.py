@@ -90,6 +90,20 @@ def _settings(args: argparse.Namespace) -> int:
     return run_settings(args.config)
 
 
+def _installer(args: argparse.Namespace) -> int:
+    try:
+        from ring.installer import InstallerError, run_installer
+    except ImportError as error:
+        return _fail(
+            f"cannot load the user interface ({error}). Install the distribution's "
+            "PySide6 package (Arch: pyside6)."
+        )
+    try:
+        return run_installer()
+    except InstallerError as error:
+        return _fail(str(error))
+
+
 def _stats(args: argparse.Namespace) -> int:
     stats = Stats(default_stats_path())
     print(f"Ring has moved windows {stats.total} times since {stats.since}.")
@@ -190,9 +204,11 @@ def _kwin_setting(group: str, key: str) -> str | None:
 
 
 def _check_overlay(report: _Report) -> None:
-    """Check what the ring is drawn with: the system's PySide6 and layer-shell."""
+    """Check what the ring is drawn with: the system's PySide6, and as what."""
     try:
-        from PySide6.QtCore import QLibraryInfo, qVersion
+        from PySide6.QtCore import qVersion
+
+        from ring.overlay.surface import LAYER_SHELL, OverlayError, choose_surface
     except ImportError as error:
         report(
             False,
@@ -202,16 +218,24 @@ def _check_overlay(report: _Report) -> None:
         )
         return
     report(True, f"PySide6 with Qt {qVersion()}")
-    imports = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.QmlImportsPath))
-    if (imports / "org" / "kde" / "layershell").is_dir():
-        report(True, "LayerShellQt QML module found")
-    else:
+    try:
+        surface = choose_surface()
+    except OverlayError as error:
+        report(False, str(error))
+        return
+    if surface == LAYER_SHELL:
+        report(True, "The ring is drawn as a layer-shell surface (LayerShellQt found)")
+    elif os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland":
         report(
-            False,
-            f"LayerShellQt QML module not found in {imports}",
-            "Install it (Arch: layer-shell-qt). If it is installed, this PySide6 is not",
-            "the distribution's: the PyPI build cannot load the system's module.",
+            None,
+            "The ring is drawn as an X11 window through Xwayland: no LayerShellQt for Qt 6",
+            "Keys pressed while the ring is open also reach the application underneath,",
+            "and which of them Ring sees is up to KWin's Legacy X11 App Support setting.",
+            "On Plasma 6, install LayerShellQt (Arch: layer-shell-qt). If it is installed,",
+            "this PySide6 is not the distribution's: the PyPI build cannot load it.",
         )
+    else:
+        report(True, "The ring is drawn as an X11 window")
 
 
 def _check_trigger(report: _Report, config: Config) -> None:
@@ -228,10 +252,12 @@ def _check_trigger(report: _Report, config: Config) -> None:
         report(
             False,
             f"Trigger key {trigger.key}: {error}",
-            f"Ring falls back to the shortcut {trigger.shortcut}. A single key needs Xwayland.",
+            f"Ring falls back to the shortcut {trigger.shortcut}. A single key needs X11",
+            "or Xwayland.",
         )
         return
-    if _kwin_setting("Xwayland", "XwaylandEavesdrops") == "None":
+    wayland = os.environ.get("XDG_SESSION_TYPE", "").lower() == "wayland"
+    if wayland and _kwin_setting("Xwayland", "XwaylandEavesdrops") == "None":
         report(
             False,
             f"Trigger key {trigger.key}: KWin is set to never show key presses to X11 apps",
@@ -239,7 +265,8 @@ def _check_trigger(report: _Report, config: Config) -> None:
             'Legacy X11 App Support, or use trigger.use = "shortcut".',
         )
         return
-    report(True, f"Trigger key {trigger.key} can be watched through Xwayland")
+    through = "Xwayland" if wayland else "the X server"
+    report(True, f"Trigger key {trigger.key} can be watched through {through}")
 
 
 def _doctor(args: argparse.Namespace) -> int:
@@ -256,10 +283,11 @@ def _doctor(args: argparse.Namespace) -> int:
     print(f"ring {__version__}")
     session = os.environ.get("XDG_SESSION_TYPE") or "unset"
     desktop = os.environ.get("XDG_CURRENT_DESKTOP") or "unset"
+    known = session.lower() in ("wayland", "x11")
     report(
-        session.lower() == "wayland",
+        known,
         f"Session: XDG_SESSION_TYPE={session}, XDG_CURRENT_DESKTOP={desktop}",
-        *(() if session.lower() == "wayland" else ("Ring needs a Wayland session.",)),
+        *(() if known else ("Ring needs a Wayland or X11 session of KDE Plasma.",)),
     )
 
     path = args.config or user_config_path()
@@ -344,6 +372,11 @@ def _build_parser() -> argparse.ArgumentParser:
     settings = commands.add_parser("settings", help="open the settings window")
     settings.add_argument("--config", type=Path, metavar="FILE", help="edit this config file")
     settings.set_defaults(handler=_settings)
+
+    installer = commands.add_parser(
+        "installer", help="the window that installs or removes Ring (from the AppImage)"
+    )
+    installer.set_defaults(handler=_installer)
 
     stats = commands.add_parser("stats", help="show how often Ring has been used")
     stats.set_defaults(handler=_stats)

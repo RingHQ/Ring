@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Ring
+GenericName=Window Snapper
+Comment=Radial window snapper for KDE Plasma
+Exec=ring
+Icon=ring
+Categories=Utility;
+Keywords=ring;window;snap;tile;

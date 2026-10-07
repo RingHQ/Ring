@@ -4,14 +4,10 @@ Idle, the process sleeps in the Qt event loop and wakes only for a D-Bus
 signal (trigger pressed/released), a socket command or a Unix signal. While
 the trigger is held it additionally reacts to pointer and key events from the
 overlay.
-
-How the pointer, clicks and keys select actions follows Loop's LoopManager,
-MouseInteractionObserver and RadialMenuViewModel.
 """
 
 import logging
 import math
-import os
 import signal
 import socket
 import time
@@ -55,7 +51,7 @@ from ring.input.keys import evdev_name
 from ring.input.shortcut import GlobalShortcut, ShortcutError
 from ring.input.xkey import KeyListener, KeyListenerError
 from ring.ipc import IpcError, IpcServer, send_command
-from ring.overlay import Highlight, Overlay, OverlayError
+from ring.overlay import Highlight, Overlay, OverlayError, choose_surface, prepare_environment
 from ring.plugins import REGISTRY
 from ring.stats import Stats, default_stats_path
 from ring.tray import Tray
@@ -462,10 +458,10 @@ def _parse_shortcut(text: str) -> tuple[int, int]:
 def run(config: Config, backend_name: str | None = None) -> int:
     """Run the daemon until it is told to quit."""
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-    if os.environ.get("XDG_SESSION_TYPE", "").lower() != "wayland":
-        raise StartupError(
-            "Ring needs a Wayland session: the radial menu is drawn as a layer-shell surface."
-        )
+    try:
+        surface = choose_surface()
+    except OverlayError as error:
+        raise StartupError(str(error)) from error
     try:
         send_command("ping", timeout=0.5)
     except IpcError:
@@ -473,8 +469,7 @@ def run(config: Config, backend_name: str | None = None) -> int:
     else:
         raise StartupError("Ring is already running.")
 
-    os.environ["QT_QPA_PLATFORM"] = "wayland"
-    os.environ["QT_WAYLAND_SHELL_INTEGRATION"] = "layer-shell"
+    prepare_environment(surface)
     # A full QApplication, not just a GUI one: the tray icon needs it.
     app = QApplication(["ring"])
     app.setQuitOnLastWindowClosed(False)
@@ -483,7 +478,7 @@ def run(config: Config, backend_name: str | None = None) -> int:
     trigger: GlobalShortcut | KeyListener | None = None
     try:
         try:
-            overlay = Overlay(config)
+            overlay = Overlay(config, surface, backend.is_composited)
         except OverlayError as error:
             raise StartupError(str(error)) from error
         REGISTRY.painter = overlay.set_colors
@@ -575,7 +570,7 @@ def run(config: Config, backend_name: str | None = None) -> int:
         signal_notifier = QSocketNotifier(wake_read.fileno(), QSocketNotifier.Type.Read)
         signal_notifier.activated.connect(app.quit)
 
-        log.info("ready: hold %s to open the radial menu", held)
+        log.info("ready: hold %s to open the radial menu (drawn with %s)", held, surface)
         try:
             code = int(app.exec())
             return RESTART if reload_requested else code

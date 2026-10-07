@@ -1,0 +1,34 @@
+# Maintainer: RingHQ <https://github.com/RingHQ>
+#
+# Build and install with `makepkg -si` in this folder. The package is called
+# ring-snapper because the AUR already has an unrelated `ring`.
+
+pkgname=ring-snapper
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Radial window snapper for KDE Plasma"
+arch=('any')
+url="https://github.com/RingHQ/Ring"
+license=('GPL-3.0-only')
+depends=('python' 'pyside6' 'layer-shell-qt' 'python-jeepney' 'python-xlib')
+makedepends=('python-build' 'python-installer' 'python-hatchling')
+optdepends=('xorg-xwayland: a single key such as Right Ctrl as the trigger')
+# Both install /usr/bin/ring.
+conflicts=('ring')
+install=ring-snapper.install
+source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
+sha256sums=('91b2ce5a54b58609dc6e290da66807619e81ec8ead573c0338d05dbf305a3ac0')
+
+build() {
+    cd "Ring-$pkgver/Linux"
+    python -m build --wheel --no-isolation
+}
+
+package() {
+    cd "Ring-$pkgver/Linux"
+    python -m installer --destdir="$pkgdir" dist/*.whl
+    install -Dm644 ../packaging/ring.service "$pkgdir/usr/lib/systemd/user/ring.service"
+    install -Dm644 ../packaging/ring-settings.desktop \
+        "$pkgdir/usr/share/applications/ring-settings.desktop"
+    install -Dm644 assets/ring-icon.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/ring.svg"
+}

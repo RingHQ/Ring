@@ -1,10 +1,5 @@
 """Window actions and the pure geometry math behind them.
 
-The action set, the frame calculations and the cycle and radial-menu rules
-are ported from Loop for macOS (https://github.com/MrKai77/Loop, GPL-3.0),
-mainly from its WindowDirection, WindowFrameResolver, CycleActionCoordinator
-and MouseInteractionObserver sources.
-
 Nothing in this module talks to a display server. Every function maps plain
 rectangles to plain rectangles, so the whole module is unit-testable.
 

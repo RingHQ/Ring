@@ -1,0 +1,56 @@
+# Pushing a tag such as v0.2.0 builds the AppImage, the wheel and the source
+# archive and attaches them to the release of that tag (created if missing).
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    working-directory: Linux
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check that the tag is the version in the code
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml)"
+          inside="$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' src/ring/__init__.py)"
+          if [ "v$version" != "$GITHUB_REF_NAME" ] || [ "$version" != "$inside" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, pyproject.toml $version, ring/__init__.py $inside"
+            exit 1
+          fi
+
+      - name: Build the wheel and the source archive
+        run: |
+          python -m pip install --quiet build
+          cp ../LICENSE .
+          python -m build
+
+      - name: Build the AppImage
+        run: sh ../packaging/appimage/build.sh dist
+
+      - name: Try the AppImage
+        run: |
+          chmod +x dist/Ring-x86_64.AppImage
+          dist/Ring-x86_64.AppImage --appimage-extract-and-run --version
+
+      - name: Attach the files to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "Ring ${GITHUB_REF_NAME#v}" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" --clobber \
+            dist/Ring-x86_64.AppImage dist/*.whl dist/*.tar.gz

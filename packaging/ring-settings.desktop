@@ -6,4 +6,4 @@ Comment=Configure the Ring radial window snapper
 Exec=ring settings
 Icon=ring
 Categories=Settings;Utility;
-Keywords=ring;loop;window;snap;tile;
+Keywords=ring;window;snap;tile;

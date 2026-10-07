@@ -1,9 +1,12 @@
 import QtQuick
 import QtQuick.Window
-import org.kde.layershell as LayerShell
 
 // One transparent surface covering a whole monitor. All state is pushed in
 // from Python (overlay/radial.py); input goes back through `bridge`.
+//
+// This file does not say how the window gets above the others: Overlay.qml
+// makes it a layer-shell surface, and on X11 Python loads it as it is and
+// sets the window flags.
 Window {
     id: root
 
@@ -26,6 +29,7 @@ Window {
     property real previewHeight: 0
     property int previewRadius: 10
     property int previewBorder: 4
+    property bool previewGlass: false
     property var previewCurve: [0.22, 1, 0.47, 1, 1, 1]
 
     property color accent: "#5e9cff"
@@ -54,15 +58,17 @@ Window {
     color: "transparent"
     flags: Qt.FramelessWindowHint
 
-    LayerShell.Window.scope: "ring"
-    LayerShell.Window.layer: LayerShell.Window.LayerOverlay
-    LayerShell.Window.anchors: LayerShell.Window.AnchorTop | LayerShell.Window.AnchorBottom
-        | LayerShell.Window.AnchorLeft | LayerShell.Window.AnchorRight
-    // -1: cover panels too, so local coordinates match the monitor's.
-    LayerShell.Window.exclusionZone: -1
-    // Exclusive: keys pressed while the menu is open select actions instead
-    // of reaching the application underneath.
-    LayerShell.Window.keyboardInteractivity: LayerShell.Window.KeyboardInteractivityExclusive
+    // Where the preview is must reach Python once per frame, before that
+    // frame is drawn, so that the blurred region goes to the compositor
+    // together with the picture it belongs to. On Wayland Python reads it
+    // itself at the last moment (see overlay/radial.py); elsewhere it is
+    // pushed from here.
+    property bool pushesPreview: false
+    onAfterAnimating: {
+        if (pushesPreview) {
+            pushPreview();
+        }
+    }
 
     onVisibleChanged: {
         if (visible) {
@@ -102,6 +108,7 @@ Window {
 
     Preview {
         id: preview
+        objectName: "preview"
         x: root.previewX
         y: root.previewY
         width: root.previewWidth
@@ -111,16 +118,9 @@ Window {
         fillColor: root.previewFill
         cornerRadius: root.previewRadius
         borderThickness: root.previewBorder
+        glass: root.previewGlass
         curve: root.previewCurve
         duration: root.animate ? root.previewMs : 0
-
-        // Several of these change in the same frame; callLater folds them
-        // into one update of the blurred region.
-        onXChanged: Qt.callLater(root.pushPreview)
-        onYChanged: Qt.callLater(root.pushPreview)
-        onWidthChanged: Qt.callLater(root.pushPreview)
-        onHeightChanged: Qt.callLater(root.pushPreview)
-        onOpacityChanged: Qt.callLater(root.pushPreview)
     }
 
     RadialMenu {

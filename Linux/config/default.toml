@@ -1,4 +1,4 @@
-# Ring default configuration. The defaults follow Loop for macOS.
+# Ring default configuration.
 #
 # Copy this file to ~/.config/ring/config.toml and keep only the keys you
 # want to change; everything you leave out falls back to the values below.
@@ -146,6 +146,8 @@ blur = true                # frosted glass behind the radial menu
 
 [preview]
 visible = true              # false: no preview, only the ring
+style = "outline"           # "outline", or "liquid_glass": a pane of clear glass with a
+                            # bright rim; blurs what is behind it and ignores border_thickness
 padding = 10                # space between the preview and the area it stands for
 corner_radius = 10
 border_thickness = 4

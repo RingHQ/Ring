@@ -5,7 +5,9 @@ JavaScript snippet with full access to its window list. Each request below is
 such a snippet; it reports its result by calling back to this process over
 D-Bus.
 
-Requires Plasma 6.
+The snippets are written for Plasma 6. Plasma 5 names the same things
+differently (clients instead of windows, numbers instead of objects for
+screens and desktops); the `kwin` object in the prelude hides that.
 """
 
 import json
@@ -40,6 +42,9 @@ from ring.backends.base import (
 )
 
 _SCRIPTING = DBusAddress("/Scripting", bus_name="org.kde.KWin", interface="org.kde.kwin.Scripting")
+_COMPOSITOR = DBusAddress(
+    "/Compositor", bus_name="org.kde.KWin", interface="org.freedesktop.DBus.Properties"
+)
 _CALLBACK_INTERFACE = "io.github.ringhq.Ring.KWinCallback"
 _CALLBACK_MEMBER = "reply"
 _TIMEOUT = 3.0
@@ -66,8 +71,82 @@ function describe(w) {
         fullscreen: Boolean(w.fullScreen),
     };
 }
+// What differs between Plasma 6 and Plasma 5. A screen is {name, geometry}
+// plus whatever identifies it to this KWin.
+var kwin = typeof workspace.windowList === "function" ? {
+    windows: function () { return workspace.windowList(); },
+    stacked: function () { return workspace.stackingOrder; },
+    active: function () { return workspace.activeWindow; },
+    activate: function (w) { workspace.activeWindow = w; },
+    onActivated: function (handler) { workspace.windowActivated.connect(handler); },
+    screens: function () {
+        return workspace.screens.map(function (screen) {
+            return {name: String(screen.name), geometry: rect(screen.geometry), output: screen};
+        });
+    },
+    workArea: function (screen) {
+        return workspace.clientArea(KWin.MaximizeArea, screen.output, workspace.currentDesktop);
+    },
+    sameScreen: function (a, b) { return a.output === b.output; },
+    onCurrentDesktop: function (w) {
+        for (var i = 0; i < w.desktops.length; i++) {
+            if (w.desktops[i] === workspace.currentDesktop) {
+                return true;
+            }
+        }
+        return w.onAllDesktops;
+    },
+    shiftDesktop: function (w, offset) {
+        var desktops = workspace.desktops;
+        var index = 0;
+        for (var i = 0; i < desktops.length; i++) {
+            if (desktops[i] === workspace.currentDesktop) {
+                index = i;
+            }
+        }
+        var count = desktops.length;
+        var target = desktops[((index + offset) % count + count) % count];
+        w.desktops = [target];
+        workspace.currentDesktop = target;
+    },
+} : {
+    windows: function () { return workspace.clientList(); },
+    stacked: function () {
+        return workspace.clientList().sort(function (a, b) {
+            return a.stackingOrder - b.stackingOrder;
+        });
+    },
+    active: function () { return workspace.activeClient; },
+    activate: function (w) { workspace.activeClient = w; },
+    onActivated: function (handler) { workspace.clientActivated.connect(handler); },
+    screens: function () {
+        var result = [];
+        for (var i = 0; i < workspace.numScreens; i++) {
+            result.push({
+                name: "screen-" + i,
+                geometry: rect(workspace.clientArea(KWin.ScreenArea, i, workspace.currentDesktop)),
+                index: i,
+            });
+        }
+        return result;
+    },
+    workArea: function (screen) {
+        return workspace.clientArea(KWin.MaximizeArea, screen.index, workspace.currentDesktop);
+    },
+    sameScreen: function (a, b) { return a.screen === b.screen; },
+    onCurrentDesktop: function (w) {
+        return w.onAllDesktops || w.desktop === workspace.currentDesktop;
+    },
+    shiftDesktop: function (w, offset) {
+        // Desktops are numbered from 1.
+        var count = workspace.desktops;
+        var target = ((workspace.currentDesktop - 1 + offset) % count + count) % count + 1;
+        w.desktop = target;
+        workspace.currentDesktop = target;
+    },
+};
 function find(id) {
-    var windows = workspace.windowList();
+    var windows = kwin.windows();
     for (var i = 0; i < windows.length; i++) {
         if (String(windows[i].internalId) === id) {
             return windows[i];
@@ -141,14 +220,17 @@ function moveTo(w, target, animation, done) {
     moving[id] = timer;
     timer.start();
 }
-function output(name) {
-    var screens = workspace.screens;
+function screenNamed(name) {
+    var screens = kwin.screens();
     for (var i = 0; i < screens.length; i++) {
         if (screens[i].name === name) {
             return screens[i];
         }
     }
     throw new Error("monitor " + name + " is no longer connected");
+}
+function publicScreen(screen) {
+    return {name: screen.name, geometry: screen.geometry};
 }
 """
 
@@ -168,7 +250,7 @@ _WRAPPER = """
 """
 
 _ACTIVE_WINDOW = """
-var w = workspace.activeWindow;
+var w = kwin.active();
 // Our own overlay is a focused layer-shell surface while the menu is open.
 if (!w || w.specialWindow || w.deleted || w.pid === args.pid) {
     return null;
@@ -178,17 +260,13 @@ return describe(w);
 
 _WINDOWS = """
 var result = [];
-var windows = workspace.windowList();
+var windows = kwin.windows();
 for (var i = 0; i < windows.length; i++) {
     var w = windows[i];
     if (!w.normalWindow || w.minimized || w.deleted || w.pid === args.pid) {
         continue;
     }
-    var here = w.onAllDesktops;
-    for (var j = 0; j < w.desktops.length && !here; j++) {
-        here = w.desktops[j] === workspace.currentDesktop;
-    }
-    if (here) {
+    if (kwin.onCurrentDesktop(w)) {
         result.push(describe(w));
     }
 }
@@ -196,29 +274,16 @@ return result;
 """
 
 _MOVE_TO_DESKTOP = """
-var w = find(args.id);
-var desktops = workspace.desktops;
-var index = 0;
-for (var i = 0; i < desktops.length; i++) {
-    if (desktops[i] === workspace.currentDesktop) {
-        index = i;
-    }
-}
-var count = desktops.length;
-var target = desktops[((index + args.offset) % count + count) % count];
-w.desktops = [target];
-workspace.currentDesktop = target;
+kwin.shiftDesktop(find(args.id), args.offset);
 return null;
 """
 
 _MONITORS = """
-return workspace.screens.map(function (screen) {
-    return {name: String(screen.name), geometry: rect(screen.geometry)};
-});
+return kwin.screens().map(publicScreen);
 """
 
 _WORK_AREA = """
-return rect(workspace.clientArea(KWin.MaximizeArea, output(args.name), workspace.currentDesktop));
+return rect(kwin.workArea(screenNamed(args.name)));
 """
 
 _CURSOR = """
@@ -227,9 +292,9 @@ return {x: Math.round(workspace.cursorPos.x), y: Math.round(workspace.cursorPos.
 
 # Everything the menu needs to open, in one round trip.
 _SCENE = """
-var w = workspace.activeWindow;
+var w = kwin.active();
 var p = {x: Math.round(workspace.cursorPos.x), y: Math.round(workspace.cursorPos.y)};
-var screens = workspace.screens;
+var screens = kwin.screens();
 var under = screens[0];
 for (var i = 0; i < screens.length; i++) {
     var g = screens[i].geometry;
@@ -245,11 +310,9 @@ return {
     // Our own overlay is a focused layer-shell surface while the menu is open.
     window: !w || w.specialWindow || w.deleted || w.pid === args.pid ? null : describe(w),
     cursor: p,
-    monitors: screens.map(function (screen) {
-        return {name: String(screen.name), geometry: rect(screen.geometry)};
-    }),
-    monitor: String(under.name),
-    area: rect(workspace.clientArea(KWin.MaximizeArea, under, workspace.currentDesktop)),
+    monitors: screens.map(publicScreen),
+    monitor: under.name,
+    area: rect(kwin.workArea(under)),
 };
 """
 
@@ -300,12 +363,12 @@ function isStashed(w) {
     return false;
 }
 function focusAnother(w) {
-    var order = workspace.stackingOrder;
+    var order = kwin.stacked();
     for (var i = order.length - 1; i >= 0; i--) {
         var other = order[i];
         if (other !== w && other.normalWindow && !other.minimized && !other.deleted
-                && !isStashed(other) && other.output === w.output) {
-            workspace.activeWindow = other;
+                && !isStashed(other) && kwin.sameScreen(other, w)) {
+            kwin.activate(other);
             return;
         }
     }
@@ -313,7 +376,7 @@ function focusAnother(w) {
 function reveal(entry, w) {
     shown[entry.window_id] = true;
     if (args.focus) {
-        workspace.activeWindow = w;
+        kwin.activate(w);
     }
     moveTo(w, entry.revealed, args.animation);
 }
@@ -321,7 +384,7 @@ function hide(entry, w, refocus) {
     shown[entry.window_id] = false;
     hiddenAt[entry.window_id] = Date.now();
     moveTo(w, entry.stashed, args.animation);
-    if (refocus && args.focus && workspace.activeWindow === w) {
+    if (refocus && args.focus && kwin.active() === w) {
         focusAnother(w);
     }
 }
@@ -390,11 +453,11 @@ handBack.singleShot = true;
 handBack.interval = 1;
 var handBackFrom = null;
 handBack.timeout.connect(function () {
-    if (handBackFrom && !handBackFrom.deleted && workspace.activeWindow === handBackFrom) {
+    if (handBackFrom && !handBackFrom.deleted && kwin.active() === handBackFrom) {
         focusAnother(handBackFrom);
     }
 });
-workspace.windowActivated.connect(function (w) {
+kwin.onActivated(function (w) {
     if (!w) {
         return;
     }
@@ -456,6 +519,8 @@ class KWinBackend(WindowBackend):
             ) from error
         # Windows still gliding: window id -> (plugin name of the script, time it ends).
         self._animating: dict[str, tuple[str, float]] = {}
+        # Plasma 6, then Plasma 5.
+        self._script_paths = ["/Scripting/Script{}", "/{}"]
         runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir()
         self._script_dir = Path(runtime_dir)
 
@@ -539,6 +604,16 @@ class KWinBackend(WindowBackend):
     def move_to_desktop(self, window: Window, offset: int) -> None:
         self._run(_MOVE_TO_DESKTOP, id=window.id, offset=offset)
 
+    def is_composited(self) -> bool:
+        # Not the X11 selection that marks a compositor: KWin keeps that
+        # while its compositing is switched off.
+        try:
+            answer = self._call(_COMPOSITOR, "Get", "ss", "org.kde.kwin.Compositing", "active")
+        except BackendError:
+            return True
+        # A variant: (signature, value).
+        return bool(answer[1]) if isinstance(answer, tuple) else True
+
     def _call(self, address: DBusAddress, method: str, signature: str = "", *body: object) -> Any:
         """Call a KWin D-Bus method and return the first value of its reply."""
         message = new_method_call(address, method, signature or None, body)
@@ -600,12 +675,7 @@ class KWinBackend(WindowBackend):
                 if not isinstance(script_id, int) or script_id < 0:
                     raise BackendError("KWin refused to load the Ring helper script")
                 try:
-                    script = DBusAddress(
-                        f"/Scripting/Script{script_id}",
-                        bus_name="org.kde.KWin",
-                        interface="org.kde.kwin.Script",
-                    )
-                    self._call(script, "run")
+                    self._start(script_id)
                     payload = self._wait_for_reply(replies, token)
                     unload = unload or not payload.get("ok")
                 except BackendError:
@@ -617,6 +687,24 @@ class KWinBackend(WindowBackend):
         if not payload.get("ok"):
             raise BackendError(f"KWin could not complete the request: {payload.get('error')}")
         return payload.get("value")
+
+    def _start(self, script_id: int) -> None:
+        """Run a loaded script. Where its D-Bus object is depends on the Plasma version."""
+        failure: BackendError | None = None
+        for path in self._script_paths:
+            script = DBusAddress(
+                path.format(script_id), bus_name="org.kde.KWin", interface="org.kde.kwin.Script"
+            )
+            try:
+                self._call(script, "run")
+            except BackendError as error:
+                failure = failure or error
+                continue
+            # Ask where it was found first from now on.
+            self._script_paths = [path, *(p for p in self._script_paths if p != path)]
+            return
+        assert failure is not None
+        raise failure
 
     def _wait_for_reply(self, replies: deque[Message], token: str) -> dict[str, Any]:
         while True:

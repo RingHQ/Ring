@@ -1,6 +1,6 @@
 import QtQuick
 
-// Loop's radial menu: a 100 px frosted ring around the cursor. The selected
+// The radial menu: a 100 px frosted ring around the cursor. The selected
 // direction lights up as a 45 degree segment in the accent color and glides
 // round to the next one; actions without a direction light up the whole
 // ring, which shrinks a little while they are selected.

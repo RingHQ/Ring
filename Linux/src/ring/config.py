@@ -1,6 +1,6 @@
 """Load and validate the TOML configuration.
 
-The defaults live in the dataclasses below and mirror Loop's own defaults;
+The defaults live in the dataclasses below;
 `config/default.toml` documents the same values and is checked against them
 by the test suite. A user file only needs to contain the keys it wants to
 change.
@@ -31,7 +31,7 @@ _COLOR = re.compile(r"#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?")
 _CUSTOM_ACTION_NAME = re.compile(r"[a-z][a-z0-9_]*")
 _PLUGIN_ACTION_NAME = re.compile(r"[A-Za-z0-9_-]+\.[a-z0-9_]+")
 
-# Per animation style, from Loop: the cubic bezier curve and duration (ms) of
+# Per animation style: the cubic bezier curve and duration (ms) of
 # frame changes, and the duration of the ring's size change.
 ANIMATIONS: dict[str, tuple[tuple[float, float, float, float], int, int]] = {
     "fluid": ((0, 0.26, 0.45, 1), 325, 200),
@@ -42,6 +42,7 @@ ANIMATIONS: dict[str, tuple[tuple[float, float, float, float], int, int]] = {
 }
 ANIMATION_STYLES = tuple(ANIMATIONS)
 PREVIEW_STARTS = ("action_center", "radial_menu", "screen_center")
+PREVIEW_STYLES = ("outline", "liquid_glass")
 MAX_TRIGGER_DELAY_MS = 2000
 
 type Chord = frozenset[str]
@@ -159,6 +160,7 @@ class ThemeConfig:
 @dataclass(frozen=True, slots=True)
 class PreviewConfig:
     visible: bool = True
+    style: str = "outline"
     padding: int = 10
     corner_radius: int = 10
     border_thickness: int = 4
@@ -534,6 +536,7 @@ def parse_config(data: Mapping[str, object]) -> Config:
     preview_table = root.table("preview")
     preview = PreviewConfig(
         visible=preview_table.boolean("visible", defaults.preview.visible),
+        style=preview_table.choice("style", defaults.preview.style, PREVIEW_STYLES),
         border_color=_color(
             preview_table, "border_color", defaults.preview.border_color, also="accent"
         ),

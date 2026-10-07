@@ -151,5 +151,13 @@ class WindowBackend(ABC):
         Returns the ids of the windows in `entries` that no longer exist.
         """
 
+    def is_composited(self) -> bool:
+        """Tell whether windows can be transparent right now.
+
+        Always true on Wayland. An X11 window manager can have compositing
+        switched off, and then a transparent window is drawn on black.
+        """
+        return True
+
     def close(self) -> None:  # noqa: B027 - optional hook, not every backend holds resources
         """Release any connection held by the backend."""

@@ -6,6 +6,7 @@ saves it as TOML and asks the running service to restart with it.
 
 import contextlib
 import math
+import os
 import subprocess
 import sys
 import tomllib
@@ -13,7 +14,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -52,6 +53,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QStackedWidget,
     QToolButton,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -73,6 +75,7 @@ from ring.config import (
     ANIMATION_STYLES,
     MAX_TRIGGER_DELAY_MS,
     PREVIEW_STARTS,
+    PREVIEW_STYLES,
     ActionsConfig,
     AnimationConfig,
     Chord,
@@ -95,6 +98,8 @@ from ring.plugins import REGISTRY, discover, load_plugins, plugin_directory
 from ring.stats import Stats, default_stats_path
 
 _SERVICE = "ring.service"
+# How long the service gets to come up before the window says how it went.
+_STARTUP_MS = 2000
 _SECTOR_LABELS = {
     Direction.CENTER: "Inside the ring",
     Direction.NORTH: "Up",
@@ -426,10 +431,13 @@ class LookPreview(QWidget):
             fill = QColor(look.fill_color)
             fill.setAlphaF(look.fill_opacity)
             border = accent if look.border_color == "accent" else QColor(look.border_color)
-            painter.setBrush(fill)
-            painter.setPen(QPen(border, max(look.border_thickness * scale, 1)))
             radius = look.corner_radius * scale
-            painter.drawRoundedRect(target, radius, radius)
+            if look.style == "liquid_glass":
+                _paint_glass(painter, target, radius, fill, border)
+            else:
+                painter.setBrush(fill)
+                painter.setPen(QPen(border, max(look.border_thickness * scale, 1)))
+                painter.drawRoundedRect(target, radius, radius)
 
         if config.radial.visible:
             outer = min(float(config.radial.radius), area.height() / 2 - 12)
@@ -450,6 +458,40 @@ class LookPreview(QWidget):
             # this is the segment pointing up right.
             painter.drawArc(circle, round((45 - 22.5) * 16), 45 * 16)
         painter.end()
+
+
+def _paint_glass(
+    painter: QPainter, target: QRectF, radius: float, tint: QColor, accent: QColor
+) -> None:
+    """Draw the Liquid Glass preview in small, after overlay/Preview.qml."""
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for step in range(3):
+        halo = QColor(accent)
+        halo.setAlphaF(0.34 * 0.58**step)
+        grown = target.adjusted(-step - 1, -step - 1, step + 1, step + 1)
+        painter.setPen(QPen(halo, 1))
+        painter.drawRoundedRect(grown, radius + step + 1, radius + step + 1)
+    pane = QLinearGradient(target.topLeft(), target.bottomLeft())
+    for position, alpha in ((0.0, 0.22), (0.3, 0.07), (0.75, 0.05), (1.0, 0.13)):
+        pane.setColorAt(position, QColor.fromRgbF(1, 1, 1, alpha))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(pane))
+    painter.drawRoundedRect(target, radius, radius)
+    painter.setBrush(tint)
+    painter.drawRoundedRect(target, radius, radius)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for step in range(4):
+        inside = target.adjusted(step + 1, step + 1, -step - 1, -step - 1)
+        painter.setPen(QPen(QColor.fromRgbF(1, 1, 1, 0.2 * 0.66**step), 1))
+        painter.drawRoundedRect(inside, max(radius - step - 1, 0), max(radius - step - 1, 0))
+    painter.setPen(QPen(QColor.fromRgbF(1, 1, 1, 0.62), 1))
+    painter.drawRoundedRect(target, radius, radius)
+    glint = QLinearGradient(target.topLeft(), target.topRight())
+    for position, alpha in ((0.0, 0.0), (0.25, 0.85), (0.6, 0.25), (1.0, 0.0)):
+        glint.setColorAt(position, QColor.fromRgbF(1, 1, 1, alpha))
+    painter.setPen(QPen(QBrush(glint), 1.5))
+    top = target.top() + 1
+    painter.drawLine(QPointF(target.left() + radius, top), QPointF(target.right() - radius, top))
 
 
 def _flat_pen(paint: QColor | QBrush, width: float) -> QPen:
@@ -473,6 +515,34 @@ def _percent(value: float, high: int = 100) -> QDoubleSpinBox:
     box.setSuffix(" %")
     box.setValue(value * 100)
     return box
+
+
+_BLUR_NOTE = "This feature is still being worked on, things may not work as expected."
+
+
+def _beta(control: QWidget, note: str) -> QWidget:
+    """Return `control` with a BETA badge and a button that explains it."""
+    badge = QLabel("BETA")
+    badge.setObjectName("beta")
+    info = QToolButton()
+    info.setIcon(QIcon.fromTheme("help-about"))
+    if info.icon().isNull():
+        info.setText("i")
+    info.setAutoRaise(True)
+    info.setToolTip(note)
+    info.setAccessibleName("About this beta feature")
+    # A tooltip only shows on hover; a click should answer as well.
+    info.clicked.connect(
+        lambda: QToolTip.showText(info.mapToGlobal(info.rect().bottomLeft()), note, info)
+    )
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(control)
+    layout.addWidget(badge)
+    layout.addWidget(info)
+    layout.addStretch(1)
+    return row
 
 
 def _combo(choices: dict[str, str], current: str) -> QComboBox:
@@ -540,10 +610,15 @@ class SettingsWindow(QWidget):
         defaults.clicked.connect(self._reset)
         close = QPushButton("Close")
         close.clicked.connect(self.close)
+        # Only there while the service is not running. Opening this window
+        # starts it (see `run_settings`), so that means it failed to start.
+        self._start_button = QPushButton("Start Ring")
+        self._start_button.clicked.connect(lambda: self.start_service())
         buttons = QHBoxLayout()
         buttons.setContentsMargins(20, 10, 20, 14)
         buttons.addWidget(defaults)
         buttons.addWidget(self._status, 1)
+        buttons.addWidget(self._start_button)
         buttons.addWidget(close)
         buttons.addWidget(apply)
 
@@ -558,6 +633,31 @@ class SettingsWindow(QWidget):
         layout.addLayout(side)
         layout.addLayout(main, 1)
         self.setStyleSheet(_style(self.palette()))
+        self._show_running("Ring is not running.")
+
+    def _show_running(self, stopped: str, started: str = "") -> bool:
+        """Offer to start the service if it is not running; say which it is."""
+        running = _ring_running()
+        self._start_button.setVisible(not running)
+        self._status.setText(started if running else stopped)
+        return running
+
+    def start_service(self, saved: str = "") -> None:
+        """Start the service and report, once it had time to come up, how that went."""
+        if not _start_ring():
+            self._status.setText(f"{saved}Ring could not be started.".strip())
+            return
+        self._start_button.setEnabled(False)
+        self._status.setText(f"{saved}Starting Ring\u2026")
+
+        def report() -> None:
+            self._start_button.setEnabled(True)
+            self._show_running(
+                f"{saved}Ring did not start; `ring doctor` in a terminal says why.",
+                f"{saved}Ring is running.",
+            )
+
+        QTimer.singleShot(_STARTUP_MS, report)
 
     # Tabs
 
@@ -650,10 +750,15 @@ class SettingsWindow(QWidget):
         ring_form.addRow("Thickness:", self._thickness)
         ring_form.addRow("Color:", self._ring_color)
         ring_form.addRow("Opacity:", self._ring_opacity)
-        ring_form.addRow(self._ring_blur)
+        ring_form.addRow(_beta(self._ring_blur, _BLUR_NOTE))
 
         self._preview_visible = QCheckBox("Show the preview")
         self._preview_visible.setChecked(look.visible)
+        self._preview_style = _combo(
+            {"outline": "Outline", "liquid_glass": "Liquid Glass"}, look.style
+        )
+        styles = {self._preview_style.itemData(i) for i in range(self._preview_style.count())}
+        assert set(PREVIEW_STYLES) == styles
         self._own_border = QCheckBox("Border in its own color")
         self._own_border.setChecked(look.border_color != "accent")
         self._border_color = ColorButton(
@@ -682,6 +787,7 @@ class SettingsWindow(QWidget):
         preview = Card("Preview")
         preview_form = QFormLayout(preview.body)
         preview_form.addRow(self._preview_visible)
+        preview_form.addRow("Style:", _beta(self._preview_style, _BLUR_NOTE))
         preview_form.addRow(border_row)
         preview_form.addRow("Border thickness:", self._border)
         preview_form.addRow("Corner radius:", self._corner)
@@ -689,7 +795,7 @@ class SettingsWindow(QWidget):
         preview_form.addRow("Fill color:", self._fill_color)
         preview_form.addRow("Fill opacity:", self._fill_opacity)
         preview_form.addRow("Grows out of:", self._start)
-        preview_form.addRow(self._preview_blur)
+        preview_form.addRow(_beta(self._preview_blur, _BLUR_NOTE))
 
         self._look_preview = LookPreview(self._look_config)
         for widget in (self._system_accent, self._use_gradient, self._ring_visible,
@@ -701,6 +807,7 @@ class SettingsWindow(QWidget):
         for box in (self._radius, self._thickness, self._ring_opacity, self._border,
                     self._corner, self._padding, self._fill_opacity):  # fmt: skip
             box.valueChanged.connect(self._look_changed)
+        self._preview_style.currentIndexChanged.connect(self._look_changed)
         self._look_changed()
 
         look = Card("Live preview")
@@ -1067,8 +1174,7 @@ class SettingsWindow(QWidget):
         self._show_stats()
 
         text = QLabel(
-            f"<b>Ring</b> {__version__}<br>A radial window snapper for Linux, ported from "
-            '<a href="https://github.com/MrKai77/Loop">Loop</a> for macOS.<br>'
+            f"<b>Ring</b> {__version__}<br>A radial window snapper for Linux.<br>"
             "Licensed under the GNU GPL v3."
         )
         text.setOpenExternalLinks(True)
@@ -1093,6 +1199,10 @@ class SettingsWindow(QWidget):
         self._accent.setEnabled(not self._system_accent.isChecked())
         self._gradient.setEnabled(self._use_gradient.isChecked())
         self._border_color.setEnabled(self._own_border.isChecked())
+        # Glass has a rim instead of a border and is always blurred.
+        glass = self._preview_style.currentData() == "liquid_glass"
+        self._border.setEnabled(not glass)
+        self._preview_blur.setEnabled(not glass)
         self._look_preview.update()
 
     def _add_key_row(self, chord: Chord, spec: ActionSpec) -> None:
@@ -1170,6 +1280,7 @@ class SettingsWindow(QWidget):
         )
         preview = PreviewConfig(
             visible=self._preview_visible.isChecked(),
+            style=self._preview_style.currentData(),
             padding=self._padding.value(),
             corner_radius=self._corner.value(),
             border_thickness=self._border.value(),
@@ -1255,8 +1366,10 @@ class SettingsWindow(QWidget):
         try:
             answer = send_command("reload")
         except IpcError:
-            self._status.setText("Saved. Ring is not running right now.")
+            # Somebody who changes settings wants them in use.
+            self.start_service("Saved. ")
             return
+        self._start_button.setVisible(False)
         if answer == "ok":
             self._status.setText("Saved. Ring restarted with the new settings.")
         else:
@@ -1316,6 +1429,14 @@ def _style(palette: QPalette) -> str:
         QLabel#brand {{ font-size: 17pt; font-weight: 700; }}
         QLabel#cardTitle {{ font-weight: 600; }}
         QLabel#hint {{ color: {faded}; }}
+        QLabel#beta {{
+            color: palette(highlight);
+            border: 1px solid palette(highlight);
+            border-radius: 4px;
+            padding: 0px 5px;
+            font-size: 8pt;
+            font-weight: 700;
+        }}
         QLabel#counter {{ font-size: 44pt; font-weight: 700; }}
         QFrame#card {{
             background: palette(base);
@@ -1352,6 +1473,40 @@ def _service_state(verb: str) -> str | None:
     return None
 
 
+def _ring_running() -> bool:
+    try:
+        send_command("ping", timeout=0.5)
+    except IpcError:
+        return False
+    return True
+
+
+def _start_ring() -> bool:
+    """Start the service; False if that could not even be tried.
+
+    Through systemd where the unit is installed, so that it is the same
+    service that starts at login. Otherwise as a program of its own that
+    outlives this window.
+    """
+    if _service_state("is-enabled") is not None:
+        _service_state("start")
+        return True
+    # From an AppImage the interpreter's modules vanish with this process.
+    packed = os.environ.get("APPIMAGE")
+    command = [packed, "run"] if packed else [sys.executable, "-m", "ring", "run"]
+    try:
+        subprocess.Popen(
+            command,
+            start_new_session=True,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        return False
+    return True
+
+
 def run_settings(path: Path | None = None) -> int:
     """Show the settings window and run until it is closed."""
     app = QApplication(sys.argv[:1])
@@ -1370,5 +1525,9 @@ def run_settings(path: Path | None = None) -> int:
     # Loaded so that their actions can be offered; same trust as the service.
     load_plugins(config.enabled_plugins, plugin_directory(target.parent))
     window = SettingsWindow(target, config, Stats(default_stats_path()))
+    # Opening the settings is how one opens Ring: after "Quit Ring" in the
+    # tray, or where it does not start at login, this brings it back.
+    if not _ring_running():
+        window.start_service()
     window.show()
     return int(app.exec())

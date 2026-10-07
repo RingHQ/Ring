@@ -5,8 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ring"
 version = "0.1.0"
-description = "Ring: a radial window snapper for Linux, ported from Loop for macOS"
-readme = "README.md"
+description = "Ring: a radial window snapper for Linux"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"
 keywords = ["window-manager", "tiling", "snapping", "wayland", "kde"]
@@ -62,6 +61,6 @@ ignore_missing_imports = true
 
 # Distribution builds of PySide6 ship without type stubs.
 [[tool.mypy.overrides]]
-module = ["ring.app", "ring.overlay.radial", "ring.settings", "ring.tray"]
+module = ["ring.app", "ring.installer", "ring.overlay.radial", "ring.settings", "ring.tray"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false

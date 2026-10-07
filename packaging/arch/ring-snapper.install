@@ -1,0 +1,9 @@
+post_install() {
+    echo "Start Ring now and at every login, as your own user:"
+    echo "    systemctl --user enable --now ring"
+    echo "Then hold Right Ctrl. 'ring doctor' checks your session if nothing appears."
+}
+
+post_upgrade() {
+    echo "Restart Ring to use the new version:  systemctl --user restart ring"
+}

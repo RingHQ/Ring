@@ -1,0 +1,97 @@
+#!/bin/sh
+# Entry point of the AppImage.
+#
+# The AppImage carries Ring and its Python dependencies, but not Python or
+# Qt: the ring is drawn with the distribution's PySide6 and LayerShellQt,
+# which cannot be bundled (see the README). It runs like the `ring` command,
+# with these additions:
+#
+#   Ring.AppImage             a downloaded copy: the installer window.
+#                             The installed copy: start Ring, or open the
+#                             settings if it runs
+#   Ring.AppImage install     install without the window: `ring` command,
+#                             start at login, launcher entry
+#   Ring.AppImage uninstall   remove that again (your settings stay)
+set -eu
+
+APPDIR="${APPDIR:-$(dirname "$(readlink -f "$0")")}"
+SHARE="$APPDIR/usr/share/ring"
+
+PYTHON=/usr/bin/python3
+[ -x "$PYTHON" ] || PYTHON="$(command -v python3 || true)"
+
+fail() {
+    printf 'Ring: %s\n' "$*" >&2
+    exit 1
+}
+
+[ -n "$PYTHON" ] || fail "python3 was not found."
+"$PYTHON" -c 'import sys; sys.exit(sys.version_info < (3, 12))' \
+    || fail "Python 3.12 or newer is needed; $PYTHON is older."
+
+export PYTHONPATH="$APPDIR/usr/lib/ring${PYTHONPATH:+:$PYTHONPATH}"
+# For the installer window.
+export RING_SHARE="$SHARE"
+
+has_pyside() {
+    "$PYTHON" -c 'import PySide6.QtQml, PySide6.QtQuick, PySide6.QtWidgets' 2>/dev/null
+}
+
+# Without PySide6 there is no window of ours to show. With a terminal the
+# answer is a message; opened from a file manager it is KDE's own dialogs,
+# which install what is missing and Ring along with it.
+without_pyside() {
+    message="Ring needs PySide6 and LayerShellQt from your distribution."
+    if [ -t 2 ] || [ -z "${APPIMAGE:-}" ] || ! command -v kdialog >/dev/null 2>&1; then
+        fail "$message Run this file with 'install' in a terminal, or install them yourself (Arch: pyside6 layer-shell-qt)."
+    fi
+    kdialog --title "Install Ring" --yesno "$message
+
+Install them, and Ring, now? You will be asked for your password." || exit 0
+    log="$(mktemp)"
+    if RING_SUDO=pkexec RING_APPIMAGE="$APPIMAGE" RING_SOURCE="$SHARE" \
+        sh "$SHARE/install.sh" >"$log" 2>&1; then
+        kdialog --title "Install Ring" --msgbox "Ring is installed. Hold Right Ctrl to open the ring.
+
+The file you downloaded is no longer needed."
+    else
+        kdialog --title "Install Ring" --error "Ring could not be installed:
+
+$(tail -n 6 "$log")"
+    fi
+    rm -f "$log"
+    exit 0
+}
+
+case "${1:-}" in
+    install)
+        shift
+        [ -n "${APPIMAGE:-}" ] || fail "'install' only works from the AppImage file."
+        RING_APPIMAGE="$APPIMAGE" RING_SOURCE="$SHARE" exec sh "$SHARE/install.sh" "$@"
+        ;;
+    uninstall)
+        shift
+        exec sh "$SHARE/install.sh" --uninstall "$@"
+        ;;
+    "")
+        has_pyside || without_pyside
+        installed="${XDG_DATA_HOME:-$HOME/.local/share}/ring/Ring.AppImage"
+        if [ -n "${APPIMAGE:-}" ] && ! [ "$APPIMAGE" -ef "$installed" ]; then
+            # A copy that is not the installed one: offer to install it.
+            set -- installer
+        elif "$PYTHON" -c '
+import sys
+from ring.ipc import IpcError, send_command
+try:
+    send_command("ping", timeout=0.5)
+except IpcError:
+    sys.exit(1)
+'; then
+            set -- settings
+        else
+            set -- run
+        fi
+        ;;
+esac
+
+exec "$PYTHON" -m ring "$@"

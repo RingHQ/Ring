@@ -55,8 +55,8 @@ def detect_backend(env: Mapping[str, str] | None = None) -> str:
     desktop = env.get("XDG_CURRENT_DESKTOP") or "unknown"
     if session == "x11" or (not session and env.get("DISPLAY")):
         raise UnsupportedSessionError(
-            f"X11 sessions (XDG_CURRENT_DESKTOP={desktop}) are not supported. "
-            "Supported: KDE Plasma 6 on Wayland; planned: Hyprland and Sway."
+            f"X11 sessions of this desktop (XDG_CURRENT_DESKTOP={desktop}) are not supported. "
+            "Supported: KDE Plasma; planned: Hyprland and Sway."
         )
     if session == "wayland" and "gnome" in desktops:
         raise UnsupportedSessionError(
@@ -66,7 +66,7 @@ def detect_backend(env: Mapping[str, str] | None = None) -> str:
     if session == "wayland":
         raise UnsupportedSessionError(
             f"The Wayland compositor of this session (XDG_CURRENT_DESKTOP={desktop}) is not "
-            "supported. Supported: KDE Plasma 6; planned: Hyprland and Sway."
+            "supported. Supported: KDE Plasma; planned: Hyprland and Sway."
         )
     raise UnsupportedSessionError(
         "Could not detect a graphical session: XDG_SESSION_TYPE is "
