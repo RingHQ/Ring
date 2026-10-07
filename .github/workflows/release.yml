@@ -1,5 +1,6 @@
 # Pushing a tag such as v0.2.0 builds the AppImage, the wheel and the source
-# archive and attaches them to the release of that tag (created if missing).
+# archive and attaches them to the release of that tag (created if missing),
+# once the checks have passed.
 name: Release
 
 on:
@@ -14,7 +15,11 @@ defaults:
     working-directory: Linux
 
 jobs:
+  check:
+    uses: ./.github/workflows/check.yml
+
   release:
+    needs: check
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

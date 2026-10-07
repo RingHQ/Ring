@@ -17,8 +17,7 @@ optdepends=('xorg-xwayland: a single key such as Right Ctrl as the trigger')
 conflicts=('ring')
 install=ring-snapper.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-# Set after tagging: sha256sum of the v$pkgver archive from GitHub.
-sha256sums=('SKIP')
+sha256sums=('fc8a6e320cc828e8106778f15313db045e89f34e7a9988553c9d20701b654785')
 
 build() {
     cd "Ring-$pkgver/Linux"

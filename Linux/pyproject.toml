@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ring"
-version = "0.2.1"
+version = "0.2.2"
 description = "Ring: a radial window snapper for Linux"
 license = "GPL-3.0-only"
 requires-python = ">=3.12"
@@ -56,11 +56,11 @@ mypy_path = "src"
 files = ["src"]
 
 [[tool.mypy.overrides]]
-module = ["jeepney", "jeepney.*", "PySide6", "PySide6.*", "Xlib", "Xlib.*"]
+module = ["jeepney", "jeepney.*", "PySide6", "PySide6.*", "shiboken6", "Xlib", "Xlib.*"]
 ignore_missing_imports = true
 
 # Distribution builds of PySide6 ship without type stubs.
 [[tool.mypy.overrides]]
-module = ["ring.app", "ring.installer", "ring.overlay.radial", "ring.settings", "ring.tray"]
+module = ["ring.app", "ring.installer", "ring.overlay.radial", "ring.settings.*", "ring.tray"]
 disallow_subclassing_any = false
 disallow_untyped_decorators = false

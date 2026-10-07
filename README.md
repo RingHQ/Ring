@@ -30,8 +30,8 @@ combination yet; reports are welcome.
 - **Left click** steps through sizes: half, third, two thirds.
 - **Arrow keys, WASD or HJKL** do the same from the keyboard. Hold two for a
   quarter, add Shift to step backwards. **Space** maximizes, **Enter** centers.
-- !!WIP!! **Q / E / Z** stash the window behind the left, right or bottom screen edge.
-  Hover the strip it leaves and it slides out; move away and it hides again. 
+- **Q / E / Z** stash the window behind the left, right or bottom screen edge (experimental).
+  Hover the strip it leaves and it slides out; move away and it hides again.
   **R** brings it back.
 - **Escape** or a right click cancels.
 - Windows glide to their new place.

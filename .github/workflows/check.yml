@@ -1,0 +1,37 @@
+# Lint and type check on every push and pull request. The release workflow
+# runs the same job before it builds anything.
+name: Check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: Linux
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Without PySide6: Ring takes it from the distribution, and those
+      # builds carry no type information, so mypy sees the same without it.
+      - name: Install the tools
+        run: python -m pip install --quiet '.[dev]'
+
+      - name: Lint
+        run: ruff check . && ruff format --check .
+
+      - name: Type check
+        run: mypy
