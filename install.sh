@@ -9,7 +9,7 @@
 #   --no-packages  do not install missing distribution packages (needs sudo)
 #   --uninstall    remove what this script installed (your settings stay)
 #
-# RING_REF picks what to install: a branch or a tag such as v0.1.0 (default
+# RING_REF picks what to install: a branch or a tag such as v0.2.1 (default
 # main). RING_SOURCE installs from a local checkout instead of downloading.
 #
 # The AppImage runs this same script for its own "install" and "uninstall",

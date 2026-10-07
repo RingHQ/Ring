@@ -4,7 +4,7 @@
 # ring-snapper because the AUR already has an unrelated `ring`.
 
 pkgname=ring-snapper
-pkgver=0.1.0
+pkgver=0.2.1
 pkgrel=1
 pkgdesc="Radial window snapper for KDE Plasma"
 arch=('any')
@@ -17,7 +17,8 @@ optdepends=('xorg-xwayland: a single key such as Right Ctrl as the trigger')
 conflicts=('ring')
 install=ring-snapper.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/v$pkgver.tar.gz")
-sha256sums=('91b2ce5a54b58609dc6e290da66807619e81ec8ead573c0338d05dbf305a3ac0')
+# Set after tagging: sha256sum of the v$pkgver archive from GitHub.
+sha256sums=('SKIP')
 
 build() {
     cd "Ring-$pkgver/Linux"
