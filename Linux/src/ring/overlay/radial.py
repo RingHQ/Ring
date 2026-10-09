@@ -179,13 +179,14 @@ class Overlay(QObject):
             self._remote.setFlags(unmanaged | Qt.WindowType.WindowTransparentForInput)
             self._window.installEventFilter(self)
             self._set("pushesPreview", True)
-        else:
+        elif self._blur_preview:
             # The blurred region has to change in the very frame the preview
             # moves in. Asked from the GUI thread, the answer can end up a
             # frame early: that thread is already on to the next frame while
             # the last one is still being sent. So it is read here, on the
             # render thread, right before each frame is drawn; the GUI thread
-            # stands still for that.
+            # stands still for that. Nobody needs it without that blur, and
+            # it is Python run for every frame.
             self._preview_item = self._window.findChild(QQuickItem, "preview")
             self._window.beforeSynchronizing.connect(
                 self._before_frame, Qt.ConnectionType.DirectConnection

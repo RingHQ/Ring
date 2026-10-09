@@ -162,6 +162,23 @@ ring trigger             # open the ring / apply, for your own key bindings
 ring doctor              # check session, monitors and configuration
 ```
 
+## How heavy it is
+
+Measured in October 2026 with version 0.2.3, on a laptop
+with integrated Intel graphics and a 2560x1440 screen @ 165 Hz: Plasma 6.7
+on Wayland, Qt 6.11, Mesa 26.2, Python 3.14. *Other machines will differ*.
+
+|                                                |                                                                             |
+| ---------------------------------------------- | --------------------------------------------------------------------------- |
+| Idle CPU                                       | ~2 seconds in over three hours                                              |
+| Memory, resident                               | 220-235 MB, most of it Qt and graphics libraries shared with other programs |
+| Memory of its own                              | about 68 MB; does not grow with use                                         |
+| Asking KWin for the window, cursor and screens | 3 ms                                                                        |
+| From there to the ring's first frame           | 3-4 ms (28 ms the first time after a start)                                 |
+| Ring while the lit segment turns               | 147 FPS                                                                     |
+| Preview while it glides                        | 164 FPS                                                                     |
+| CPU while something animates                   | 60-80 % of one core, most of it in the graphics driver                      |
+
 ## Not there yet
 
 - Desktops other than KDE Plasma.
@@ -178,10 +195,21 @@ python -m venv --system-site-packages .venv
 .venv/bin/ring run
 ```
 
+---
+
 ## Credits and license
 
-Ring's actions, window math, cycle rules, ring behavior, defaults and
-animation curves are ported from [Loop](https://github.com/MrKai77/Loop) by
-MrKai77 and contributors.
+Based on [Loop](https://github.com/MrKai77/Loop) for macOS by [MrKai77](https://github.com/MrKai77) and contributors, rebuilt for Linux.
+
+Ring is built with:
+
+- [Qt](https://www.qt.io) and [PySide6](https://doc.qt.io/qtforpython-6/) for the ring, the preview and the settings window.
+- [KWin](https://invent.kde.org/plasma/kwin)'s scripting interface, which moves the windows.
+- KDE's [LayerShellQt](https://invent.kde.org/plasma/layer-shell-qt), which puts the ring above them on Wayland.
+- [jeepney](https://gitlab.com/takluyver/jeepney) for D-Bus.
+- [python-xlib](https://github.com/python-xlib/python-xlib) for the trigger key.
+
+Thanks to everyone who tries it and reports what breaks:
+[issues](https://github.com/RingHQ/Ring/issues) and pull requests are welcome.
 
 Ring is licensed under the [GNU GPL v3](LICENSE).

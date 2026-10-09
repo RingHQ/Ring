@@ -38,16 +38,40 @@ Item {
         NumberAnimation { duration: menu.sizeMs; easing.type: Easing.OutQuad }
     }
 
-    onShownAngleChanged: canvas.requestPaint()
-    onHighlightChanged: canvas.requestPaint()
-    onAccentChanged: canvas.requestPaint()
-    onAccent2Changed: canvas.requestPaint()
-    onOuterRadiusChanged: canvas.requestPaint()
-    onThicknessChanged: canvas.requestPaint()
-    onRingColorChanged: canvas.requestPaint()
+    onShownAngleChanged: lit.requestPaint()
+    onHighlightChanged: lit.requestPaint()
+    onAccentChanged: lit.requestPaint()
+    onAccent2Changed: lit.requestPaint()
+    onOuterRadiusChanged: { ring.requestPaint(); lit.requestPaint(); }
+    onThicknessChanged: { ring.requestPaint(); lit.requestPaint(); }
+    onRingColorChanged: ring.requestPaint()
 
+    // The ring: dark glass with a soft shadow, more opaque when the
+    // compositor does not blur what is behind it. It is a picture of its
+    // own because the shadow is slow to paint, far too slow to do again for
+    // every frame of a turning segment.
     Canvas {
-        id: canvas
+        id: ring
+        anchors.fill: parent
+        antialiasing: true
+
+        onPaint: {
+            var ctx = getContext("2d");
+            ctx.reset();
+            var c = width / 2;
+            ctx.shadowColor = Qt.rgba(0, 0, 0, 0.35);
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.arc(c, c, menu.outerRadius - menu.thickness / 2, 0, 2 * Math.PI);
+            ctx.lineWidth = menu.thickness;
+            ctx.strokeStyle = menu.ringColor;
+            ctx.stroke();
+        }
+    }
+
+    // What is lit, and the hairlines on top of it.
+    Canvas {
+        id: lit
         anchors.fill: parent
         antialiasing: true
 
@@ -58,18 +82,6 @@ Item {
             var outer = menu.outerRadius;
             var inner = outer - menu.thickness;
             var mid = (outer + inner) / 2;
-
-            // The ring: dark glass with a soft shadow, more opaque when the
-            // compositor does not blur what is behind it.
-            ctx.save();
-            ctx.shadowColor = Qt.rgba(0, 0, 0, 0.35);
-            ctx.shadowBlur = 10;
-            ctx.beginPath();
-            ctx.arc(c, c, mid, 0, 2 * Math.PI);
-            ctx.lineWidth = menu.thickness;
-            ctx.strokeStyle = menu.ringColor;
-            ctx.stroke();
-            ctx.restore();
 
             if (menu.highlight !== 0) {
                 var gradient = ctx.createLinearGradient(c - outer, c - outer, c + outer, c + outer);
